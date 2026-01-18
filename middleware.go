@@ -43,12 +43,14 @@ func HTTPMiddleware(ctx context.Context, handler http.Handler, opts ...Middlewar
 		labels := []string{"http.method", "http.path", "http.status_code"}
 		labels = append(labels, cfg.additionalLabels...)
 
-		// Start operation with the base context (not request context yet)
-		// This ensures bedrock is available
+		// Start operation with the request context
+		// Add bedrock from base context if not already present
 		reqCtx := r.Context()
-		if bedrockFromContext(reqCtx).isNoop {
-			// If request doesn't have bedrock, use the base context
-			reqCtx = ctx
+		baseBedrock := bedrockFromContext(ctx)
+
+		// Add bedrock to request context if not present (preserves other context values)
+		if bedrockFromContext(reqCtx).isNoop && baseBedrock != nil && !baseBedrock.isNoop {
+			reqCtx = WithBedrock(reqCtx, baseBedrock)
 		}
 
 		op, opCtx := Operation(reqCtx, cfg.operationName,
