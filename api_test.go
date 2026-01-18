@@ -361,3 +361,44 @@ func TestMetricsSameName(t *testing.T) {
 		t.Error("expected same counter instance for same name")
 	}
 }
+
+func TestStaticAttributesInLogs(t *testing.T) {
+	var buf bytes.Buffer
+	ctx, close := Init(context.Background(),
+		WithConfig(Config{
+			ServiceName: "test-service",
+			LogLevel:    "info",
+			LogFormat:   "json",
+			LogOutput:   &buf,
+		}),
+		WithStaticAttrs(
+			attr.String("env", "production"),
+			attr.String("version", "1.2.3"),
+		),
+	)
+	defer close()
+
+	Info(ctx, "test log message", attr.String("user_id", "42"))
+
+	output := buf.String()
+	if output == "" {
+		t.Fatal("expected log output")
+	}
+
+	// Verify static attributes are included
+	if !bytes.Contains(buf.Bytes(), []byte("env")) {
+		t.Error("expected log to contain 'env' static attribute")
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("production")) {
+		t.Error("expected log to contain 'production' value")
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("version")) {
+		t.Error("expected log to contain 'version' static attribute")
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("1.2.3")) {
+		t.Error("expected log to contain '1.2.3' value")
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("user_id")) {
+		t.Error("expected log to contain 'user_id' dynamic attribute")
+	}
+}

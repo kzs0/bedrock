@@ -59,7 +59,20 @@ func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 		}
 		return "", ""
 	})
-	b.logger = slog.New(handler)
+
+	// Add static attributes to logger
+	slogAttrs := make([]slog.Attr, 0, b.staticAttr.Len())
+	b.staticAttr.Range(func(a attr.Attr) bool {
+		slogAttrs = append(slogAttrs, blog.AttrToSlog(a))
+		return true
+	})
+
+	var loggerHandler slog.Handler = handler
+	if len(slogAttrs) > 0 {
+		loggerHandler = handler.WithAttrs(slogAttrs)
+	}
+
+	b.logger = slog.New(loggerHandler)
 	b.logBridge = blog.NewBridge(b.logger)
 
 	// Setup tracing

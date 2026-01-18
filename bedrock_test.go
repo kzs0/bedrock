@@ -309,3 +309,69 @@ func TestNoopBedrock(t *testing.T) {
 	// Should not panic
 	op.Register(ctx, attr.String("key", "value"))
 }
+
+func TestStaticAttributesInMetrics(t *testing.T) {
+	ctx, close := Init(context.Background(),
+		WithConfig(Config{ServiceName: "test-service"}),
+		WithStaticAttrs(
+			attr.String("env", "test"),
+			attr.String("region", "us-west-2"),
+		),
+	)
+	defer close()
+
+	// Create operation
+	op, ctx := Operation(ctx, "test.static_metrics",
+		MetricLabels("status"),
+		Attrs(attr.String("status", "ok")),
+	)
+	op.Done()
+
+	// Verify metrics include static attributes as labels
+	b := FromContext(ctx)
+	families := b.Metrics().Gather()
+
+	foundMetric := false
+	for _, fam := range families {
+		if fam.Name == "test_static_metrics_count" {
+			foundMetric = true
+			if len(fam.Metrics) == 0 {
+				t.Fatal("expected metric to have values")
+			}
+
+			metric := fam.Metrics[0]
+
+			// Check for static attributes
+			hasEnv := false
+			hasRegion := false
+			hasStatus := false
+
+			metric.Labels.Range(func(a attr.Attr) bool {
+				if a.Key == "env" && a.Value.AsString() == "test" {
+					hasEnv = true
+				}
+				if a.Key == "region" && a.Value.AsString() == "us-west-2" {
+					hasRegion = true
+				}
+				if a.Key == "status" && a.Value.AsString() == "ok" {
+					hasStatus = true
+				}
+				return true
+			})
+
+			if !hasEnv {
+				t.Error("expected metric to have 'env' static label")
+			}
+			if !hasRegion {
+				t.Error("expected metric to have 'region' static label")
+			}
+			if !hasStatus {
+				t.Error("expected metric to have 'status' operation label")
+			}
+		}
+	}
+
+	if !foundMetric {
+		t.Error("expected to find test.static_metrics_count metric")
+	}
+}

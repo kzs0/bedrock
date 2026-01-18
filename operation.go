@@ -101,12 +101,20 @@ func (op *operationState) markFailure(err error) {
 
 // buildMetricLabels builds the metric labels from registered names.
 // If a label name was registered but no attribute with that key exists, uses "_".
+// Static attributes are automatically included as labels.
 func (op *operationState) buildMetricLabels() []attr.Attr {
 	op.mu.Lock()
 	defer op.mu.Unlock()
 
-	labels := make([]attr.Attr, 0, len(op.metricLabels))
+	// Start with static attributes
+	labels := make([]attr.Attr, 0, len(op.metricLabels)+op.bedrock.staticAttr.Len())
 
+	op.bedrock.staticAttr.Range(func(a attr.Attr) bool {
+		labels = append(labels, a)
+		return true
+	})
+
+	// Add operation-specific labels
 	for _, labelName := range op.metricLabels {
 		found := false
 		op.attrs.Range(func(a attr.Attr) bool {
@@ -136,11 +144,20 @@ func (op *operationState) recordMetrics() {
 	duration := time.Since(op.startTime)
 	labels := op.buildMetricLabels()
 
+	// Build combined label names (static + operation-specific)
+	staticLabelNames := make([]string, 0, op.bedrock.staticAttr.Len())
+	op.bedrock.staticAttr.Range(func(a attr.Attr) bool {
+		staticLabelNames = append(staticLabelNames, a.Key)
+		return true
+	})
+
+	allLabelNames := append(staticLabelNames, op.metricLabels...)
+
 	// Record count
 	counter := op.bedrock.metrics.Counter(
 		op.name+"_count",
 		"Total count of "+op.name+" operations",
-		op.metricLabels...,
+		allLabelNames...,
 	)
 	counter.With(labels...).Inc()
 
@@ -149,14 +166,14 @@ func (op *operationState) recordMetrics() {
 		successCounter := op.bedrock.metrics.Counter(
 			op.name+"_successes",
 			"Successful "+op.name+" operations",
-			op.metricLabels...,
+			allLabelNames...,
 		)
 		successCounter.With(labels...).Inc()
 	} else {
 		failureCounter := op.bedrock.metrics.Counter(
 			op.name+"_failures",
 			"Failed "+op.name+" operations",
-			op.metricLabels...,
+			allLabelNames...,
 		)
 		failureCounter.With(labels...).Inc()
 	}
@@ -166,7 +183,7 @@ func (op *operationState) recordMetrics() {
 		op.name+"_duration_ms",
 		"Duration of "+op.name+" operations in milliseconds",
 		nil, // Use default buckets
-		op.metricLabels...,
+		allLabelNames...,
 	)
 	histogram.With(labels...).Observe(float64(duration.Milliseconds()))
 }
