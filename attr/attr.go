@@ -63,16 +63,55 @@ func Error(err error) Attr {
 	return Attr{Key: "error", Value: StringValue(err.Error())}
 }
 
+// Aggregation represents an aggregation operation for source metrics.
+// Aggregations are used by sources to track accumulated values over time.
+type Aggregation interface {
+	aggregation() // private marker method
+}
+
 // SumAttr represents an aggregation attribute for summing values.
+// Used to track cumulative totals (e.g., total requests, total bytes).
 type SumAttr struct {
 	Key   string
 	Value float64
 }
 
+func (SumAttr) aggregation() {}
+
 // Sum creates a sum aggregation attribute.
-// This is used for sources to aggregate metrics.
+// This is used for sources to aggregate metrics as counters.
 func Sum(key string, value float64) SumAttr {
 	return SumAttr{Key: key, Value: value}
+}
+
+// GaugeAttr represents a gauge aggregation for tracking current values.
+// Used to track values that can go up or down (e.g., active connections, queue depth).
+type GaugeAttr struct {
+	Key   string
+	Value float64
+}
+
+func (GaugeAttr) aggregation() {}
+
+// Gauge creates a gauge aggregation attribute.
+// This is used for sources to set gauge values.
+func Gauge(key string, value float64) GaugeAttr {
+	return GaugeAttr{Key: key, Value: value}
+}
+
+// HistogramAttr represents a histogram observation for tracking distributions.
+// Used to track distributions of values (e.g., request durations, response sizes).
+type HistogramAttr struct {
+	Key   string
+	Value float64
+}
+
+func (HistogramAttr) aggregation() {}
+
+// Histogram creates a histogram aggregation attribute.
+// This is used for sources to record histogram observations.
+func Histogram(key string, value float64) HistogramAttr {
+	return HistogramAttr{Key: key, Value: value}
 }
 
 // Event represents a trace event with attributes.

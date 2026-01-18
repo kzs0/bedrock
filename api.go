@@ -22,6 +22,82 @@ type Src struct {
 	config  *sourceConfig
 }
 
+// CounterWithStatic wraps a metric.Counter and automatically includes static labels.
+type CounterWithStatic struct {
+	counter      *metric.Counter
+	staticLabels []attr.Attr
+}
+
+// With returns a CounterVec with the given label values plus static labels.
+func (c *CounterWithStatic) With(labels ...attr.Attr) *metric.CounterVec {
+	allLabels := append(c.staticLabels, labels...)
+	return c.counter.With(allLabels...)
+}
+
+// Inc increments the counter by 1 with static labels.
+func (c *CounterWithStatic) Inc() {
+	c.counter.With(c.staticLabels...).Inc()
+}
+
+// Add adds the given value to the counter with static labels.
+func (c *CounterWithStatic) Add(v float64) {
+	c.counter.With(c.staticLabels...).Add(v)
+}
+
+// GaugeWithStatic wraps a metric.Gauge and automatically includes static labels.
+type GaugeWithStatic struct {
+	gauge        *metric.Gauge
+	staticLabels []attr.Attr
+}
+
+// With returns a GaugeVec with the given label values plus static labels.
+func (g *GaugeWithStatic) With(labels ...attr.Attr) *metric.GaugeVec {
+	allLabels := append(g.staticLabels, labels...)
+	return g.gauge.With(allLabels...)
+}
+
+// Set sets the gauge to the given value with static labels.
+func (g *GaugeWithStatic) Set(v float64) {
+	g.gauge.With(g.staticLabels...).Set(v)
+}
+
+// Inc increments the gauge by 1 with static labels.
+func (g *GaugeWithStatic) Inc() {
+	g.gauge.With(g.staticLabels...).Inc()
+}
+
+// Dec decrements the gauge by 1 with static labels.
+func (g *GaugeWithStatic) Dec() {
+	g.gauge.With(g.staticLabels...).Dec()
+}
+
+// Add adds the given value to the gauge with static labels.
+func (g *GaugeWithStatic) Add(v float64) {
+	g.gauge.With(g.staticLabels...).Add(v)
+}
+
+// Sub subtracts the given value from the gauge with static labels.
+func (g *GaugeWithStatic) Sub(v float64) {
+	g.gauge.With(g.staticLabels...).Sub(v)
+}
+
+// HistogramWithStatic wraps a metric.Histogram and automatically includes static labels.
+type HistogramWithStatic struct {
+	histogram    *metric.Histogram
+	staticLabels []attr.Attr
+}
+
+// With returns a HistogramVec with the given label values plus static labels.
+func (h *HistogramWithStatic) With(labels ...attr.Attr) *metric.HistogramVec {
+	allLabels := append(h.staticLabels, labels...)
+	return h.histogram.With(allLabels...)
+}
+
+// Observe records an observation with static labels.
+func (h *HistogramWithStatic) Observe(v float64) {
+	h.histogram.With(h.staticLabels...).Observe(v)
+}
+
 // Init initializes bedrock in the context and returns a context with bedrock attached
 // and a cleanup function. If no config is provided, it loads from environment variables.
 //
@@ -202,7 +278,16 @@ func (op *Op) Done() {
 
 // Aggregate records aggregated metrics for the source.
 // Sources typically track aggregates since they don't "complete" like operations.
-func (src *Src) Aggregate(ctx context.Context, items ...interface{}) {
+// Accepts Sum, Gauge, and Histogram aggregations.
+//
+// Usage:
+//
+//	source.Aggregate(ctx,
+//	    attr.Sum("requests", 1),
+//	    attr.Gauge("queue_depth", 42),
+//	    attr.Histogram("latency_ms", 123.45),
+//	)
+func (src *Src) Aggregate(ctx context.Context, items ...attr.Aggregation) {
 	if src.bedrock.isNoop {
 		return
 	}
@@ -211,13 +296,29 @@ func (src *Src) Aggregate(ctx context.Context, items ...interface{}) {
 		switch v := item.(type) {
 		case attr.SumAttr:
 			// Record as counter
-			counter := src.bedrock.metrics.Counter(
+			counter := Counter(
+				ctx,
 				src.name+"_"+v.Key,
 				"Aggregated "+v.Key+" for "+src.name,
 			)
-			counter.Inc()
-		case attr.Attr:
-			// Just store as attribute (could be used for labels later)
+			counter.Add(v.Value)
+		case attr.GaugeAttr:
+			// Record as gauge
+			gauge := Gauge(
+				ctx,
+				src.name+"_"+v.Key,
+				"Aggregated "+v.Key+" for "+src.name,
+			)
+			gauge.Set(v.Value)
+		case attr.HistogramAttr:
+			// Record as histogram
+			histogram := Histogram(
+				ctx,
+				src.name+"_"+v.Key,
+				"Aggregated "+v.Key+" for "+src.name,
+				nil, // use default buckets
+			)
+			histogram.Observe(v.Value)
 		}
 	}
 }
@@ -261,40 +362,107 @@ func applyInitOptions(opts []InitOption) initConfig {
 }
 
 // Counter creates or retrieves a counter metric from the bedrock instance in context.
-// If bedrock is not initialized in context, returns a noop counter.
+// Static labels are automatically included when recording values.
 //
 // Usage:
 //
 //	counter := bedrock.Counter(ctx, "http_requests_total", "Total HTTP requests", "method", "status")
 //	counter.With(attr.String("method", "GET"), attr.String("status", "200")).Inc()
-func Counter(ctx context.Context, name, help string, labelNames ...string) *metric.Counter {
+//	// Or without additional labels:
+//	counter.Inc() // automatically includes static labels
+func Counter(ctx context.Context, name, help string, labelNames ...string) *CounterWithStatic {
 	b := bedrockFromContext(ctx)
-	return b.metrics.Counter(name, help, labelNames...)
+
+	// Include static label names
+	staticLabelNames := make([]string, 0, b.staticAttr.Len())
+	b.staticAttr.Range(func(a attr.Attr) bool {
+		staticLabelNames = append(staticLabelNames, a.Key)
+		return true
+	})
+
+	// Get static label values
+	staticLabels := make([]attr.Attr, 0, b.staticAttr.Len())
+	b.staticAttr.Range(func(a attr.Attr) bool {
+		staticLabels = append(staticLabels, a)
+		return true
+	})
+
+	allLabelNames := append(staticLabelNames, labelNames...)
+	counter := b.metrics.Counter(name, help, allLabelNames...)
+
+	return &CounterWithStatic{
+		counter:      counter,
+		staticLabels: staticLabels,
+	}
 }
 
 // Gauge creates or retrieves a gauge metric from the bedrock instance in context.
-// If bedrock is not initialized in context, returns a noop gauge.
+// Static labels are automatically included when recording values.
 //
 // Usage:
 //
 //	gauge := bedrock.Gauge(ctx, "active_connections", "Active connections")
-//	gauge.Set(42)
-func Gauge(ctx context.Context, name, help string, labelNames ...string) *metric.Gauge {
+//	gauge.Set(42) // automatically includes static labels
+func Gauge(ctx context.Context, name, help string, labelNames ...string) *GaugeWithStatic {
 	b := bedrockFromContext(ctx)
-	return b.metrics.Gauge(name, help, labelNames...)
+
+	// Include static label names
+	staticLabelNames := make([]string, 0, b.staticAttr.Len())
+	b.staticAttr.Range(func(a attr.Attr) bool {
+		staticLabelNames = append(staticLabelNames, a.Key)
+		return true
+	})
+
+	// Get static label values
+	staticLabels := make([]attr.Attr, 0, b.staticAttr.Len())
+	b.staticAttr.Range(func(a attr.Attr) bool {
+		staticLabels = append(staticLabels, a)
+		return true
+	})
+
+	allLabelNames := append(staticLabelNames, labelNames...)
+	gauge := b.metrics.Gauge(name, help, allLabelNames...)
+
+	return &GaugeWithStatic{
+		gauge:        gauge,
+		staticLabels: staticLabels,
+	}
 }
 
 // Histogram creates or retrieves a histogram metric from the bedrock instance in context.
 // Uses default buckets if buckets is nil.
-// If bedrock is not initialized in context, returns a noop histogram.
+// Static labels are automatically included when recording values.
 //
 // Usage:
 //
 //	hist := bedrock.Histogram(ctx, "request_duration_ms", "Request duration", nil, "method")
 //	hist.With(attr.String("method", "GET")).Observe(123.45)
-func Histogram(ctx context.Context, name, help string, buckets []float64, labelNames ...string) *metric.Histogram {
+//	// Or without additional labels:
+//	hist.Observe(123.45) // automatically includes static labels
+func Histogram(ctx context.Context, name, help string, buckets []float64, labelNames ...string) *HistogramWithStatic {
 	b := bedrockFromContext(ctx)
-	return b.metrics.Histogram(name, help, buckets, labelNames...)
+
+	// Include static label names
+	staticLabelNames := make([]string, 0, b.staticAttr.Len())
+	b.staticAttr.Range(func(a attr.Attr) bool {
+		staticLabelNames = append(staticLabelNames, a.Key)
+		return true
+	})
+
+	// Get static label values
+	staticLabels := make([]attr.Attr, 0, b.staticAttr.Len())
+	b.staticAttr.Range(func(a attr.Attr) bool {
+		staticLabels = append(staticLabels, a)
+		return true
+	})
+
+	allLabelNames := append(staticLabelNames, labelNames...)
+	histogram := b.metrics.Histogram(name, help, buckets, allLabelNames...)
+
+	return &HistogramWithStatic{
+		histogram:    histogram,
+		staticLabels: staticLabels,
+	}
 }
 
 // Debug logs a debug message with the given attributes.
