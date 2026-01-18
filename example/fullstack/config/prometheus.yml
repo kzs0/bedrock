@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: "bedrock-demo"
+    replica: "prometheus-1"
+
+scrape_configs:
+  # Scrape Prometheus itself
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Scrape bedrock demo application
+  - job_name: "bedrock-app"
+    static_configs:
+      - targets: ["app:9090"]
+    scrape_interval: 5s
+    metrics_path: "/metrics"
