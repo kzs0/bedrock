@@ -108,20 +108,31 @@ func handleUsers(w http.ResponseWriter, r *http.Request) {
 
 	op.Register(ctx, attr.Int("user_count", 42))
 
+	// Demonstrate convenient logging API (includes static attributes automatically)
+	bedrock.Info(ctx, "processing user request", attr.String("path", r.URL.Path))
+
 	// Simulate work
 	result, err := doWork(ctx)
 	if err != nil {
 		op.Register(ctx, attr.Error(err))
+		bedrock.Error(ctx, "request failed", attr.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	bedrock.Info(ctx, "request completed successfully", attr.String("result", result))
 	fmt.Fprintf(w, "Result: %s\n", result)
 }
 
 func loop(ctx context.Context, term time.Duration) error {
 	source, ctx := bedrock.Source(ctx, "source.loop")
 	defer source.Done()
+
+	// Demonstrate convenient metric creation API
+	loopCounter := bedrock.Counter(ctx, "background_loop_iterations", "Total loop iterations")
+	activeGauge := bedrock.Gauge(ctx, "background_active", "Whether background loop is active")
+	activeGauge.Set(1)
+	defer activeGauge.Set(0)
 
 	ticker := time.NewTicker(term)
 	defer ticker.Stop()
@@ -132,8 +143,12 @@ func loop(ctx context.Context, term time.Duration) error {
 
 		select {
 		case <-ctx.Done():
+			bedrock.Info(ctx, "background loop stopping")
 			return nil
 		case <-ticker.C:
+			loopCounter.Inc()
+			bedrock.Debug(ctx, "background loop tick", attr.Duration("interval", term))
+
 			op, ctx := bedrock.Operation(ctx, "inner.loop")
 
 			op.Register(ctx,
@@ -155,7 +170,7 @@ func helper(ctx context.Context) {
 	step.Register(ctx, attr.Int("helper_count", 1))
 }
 
-// doWork demonstrates nested operations
+// doWork demonstrates nested operations and convenient metrics API
 func doWork(ctx context.Context) (string, error) {
 	op, ctx := bedrock.Operation(ctx, "db.query",
 		bedrock.Attrs(
@@ -166,8 +181,22 @@ func doWork(ctx context.Context) (string, error) {
 	)
 	defer op.Done()
 
+	// Demonstrate convenient metrics API with labels
+	queryHistogram := bedrock.Histogram(ctx, "custom_query_duration_ms",
+		"Custom query duration in milliseconds", nil, "db_system")
+
+	start := time.Now()
+	bedrock.Debug(ctx, "executing database query")
+
 	// Simulate database work
 	time.Sleep(50 * time.Millisecond)
+
+	duration := time.Since(start)
+	queryHistogram.With(attr.String("db_system", "postgresql")).Observe(float64(duration.Milliseconds()))
+
+	bedrock.Info(ctx, "database query completed",
+		attr.Duration("duration", duration),
+		attr.String("db.system", "postgresql"))
 
 	return "success", nil
 }

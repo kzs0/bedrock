@@ -3,8 +3,10 @@ package bedrock
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/kzs0/bedrock/attr"
+	"github.com/kzs0/bedrock/metric"
 	"github.com/kzs0/bedrock/trace"
 )
 
@@ -256,4 +258,96 @@ func applyInitOptions(opts []InitOption) initConfig {
 		opt(&cfg)
 	}
 	return cfg
+}
+
+// Counter creates or retrieves a counter metric from the bedrock instance in context.
+// If bedrock is not initialized in context, returns a noop counter.
+//
+// Usage:
+//
+//	counter := bedrock.Counter(ctx, "http_requests_total", "Total HTTP requests", "method", "status")
+//	counter.With(attr.String("method", "GET"), attr.String("status", "200")).Inc()
+func Counter(ctx context.Context, name, help string, labelNames ...string) *metric.Counter {
+	b := bedrockFromContext(ctx)
+	return b.metrics.Counter(name, help, labelNames...)
+}
+
+// Gauge creates or retrieves a gauge metric from the bedrock instance in context.
+// If bedrock is not initialized in context, returns a noop gauge.
+//
+// Usage:
+//
+//	gauge := bedrock.Gauge(ctx, "active_connections", "Active connections")
+//	gauge.Set(42)
+func Gauge(ctx context.Context, name, help string, labelNames ...string) *metric.Gauge {
+	b := bedrockFromContext(ctx)
+	return b.metrics.Gauge(name, help, labelNames...)
+}
+
+// Histogram creates or retrieves a histogram metric from the bedrock instance in context.
+// Uses default buckets if buckets is nil.
+// If bedrock is not initialized in context, returns a noop histogram.
+//
+// Usage:
+//
+//	hist := bedrock.Histogram(ctx, "request_duration_ms", "Request duration", nil, "method")
+//	hist.With(attr.String("method", "GET")).Observe(123.45)
+func Histogram(ctx context.Context, name, help string, buckets []float64, labelNames ...string) *metric.Histogram {
+	b := bedrockFromContext(ctx)
+	return b.metrics.Histogram(name, help, buckets, labelNames...)
+}
+
+// Debug logs a debug message with the given attributes.
+// Uses the bedrock logger from context, which includes static attributes.
+//
+// Usage:
+//
+//	bedrock.Debug(ctx, "processing request", attr.String("user_id", "123"))
+func Debug(ctx context.Context, msg string, attrs ...attr.Attr) {
+	b := bedrockFromContext(ctx)
+	b.logBridge.Debug(ctx, msg, attrs...)
+}
+
+// Info logs an info message with the given attributes.
+// Uses the bedrock logger from context, which includes static attributes.
+//
+// Usage:
+//
+//	bedrock.Info(ctx, "request completed", attr.Int("status", 200))
+func Info(ctx context.Context, msg string, attrs ...attr.Attr) {
+	b := bedrockFromContext(ctx)
+	b.logBridge.Info(ctx, msg, attrs...)
+}
+
+// Warn logs a warning message with the given attributes.
+// Uses the bedrock logger from context, which includes static attributes.
+//
+// Usage:
+//
+//	bedrock.Warn(ctx, "high latency detected", attr.Duration("latency", 5*time.Second))
+func Warn(ctx context.Context, msg string, attrs ...attr.Attr) {
+	b := bedrockFromContext(ctx)
+	b.logBridge.Warn(ctx, msg, attrs...)
+}
+
+// Error logs an error message with the given attributes.
+// Uses the bedrock logger from context, which includes static attributes.
+//
+// Usage:
+//
+//	bedrock.Error(ctx, "database connection failed", attr.Error(err))
+func Error(ctx context.Context, msg string, attrs ...attr.Attr) {
+	b := bedrockFromContext(ctx)
+	b.logBridge.Error(ctx, msg, attrs...)
+}
+
+// Log logs a message at the given level with attributes.
+// Uses the bedrock logger from context, which includes static attributes.
+//
+// Usage:
+//
+//	bedrock.Log(ctx, slog.LevelInfo, "custom log", attr.String("key", "value"))
+func Log(ctx context.Context, level slog.Level, msg string, attrs ...attr.Attr) {
+	b := bedrockFromContext(ctx)
+	b.logBridge.Log(ctx, level, msg, attrs...)
 }
