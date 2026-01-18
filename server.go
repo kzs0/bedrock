@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/kzs0/bedrock/metric/prometheus"
 	"github.com/kzs0/bedrock/profile"
@@ -11,9 +12,10 @@ import (
 
 // Server provides HTTP endpoints for metrics and profiling.
 type Server struct {
-	bedrock *Bedrock
-	server  *http.Server
-	mux     *http.ServeMux
+	bedrock         *Bedrock
+	server          *http.Server
+	mux             *http.ServeMux
+	shutdownTimeout time.Duration
 }
 
 // ServerConfig configures the observability HTTP server.
@@ -24,14 +26,55 @@ type ServerConfig struct {
 	EnableMetrics bool
 	// EnablePprof enables the /debug/pprof endpoints.
 	EnablePprof bool
+
+	// HTTP Protection Settings
+
+	// ReadTimeout is the maximum duration for reading the entire request,
+	// including the body. A zero or negative value means no timeout.
+	// Default: 10 seconds
+	ReadTimeout time.Duration
+
+	// ReadHeaderTimeout is the amount of time allowed to read request headers.
+	// This should be set to protect against slow-loris attacks.
+	// Default: 5 seconds
+	ReadHeaderTimeout time.Duration
+
+	// WriteTimeout is the maximum duration before timing out writes of the response.
+	// This includes processing time. A zero or negative value means no timeout.
+	// Default: 30 seconds
+	WriteTimeout time.Duration
+
+	// IdleTimeout is the maximum amount of time to wait for the next request
+	// when keep-alives are enabled. If IdleTimeout is zero, ReadTimeout is used.
+	// Default: 120 seconds
+	IdleTimeout time.Duration
+
+	// MaxHeaderBytes controls the maximum number of bytes the server will
+	// read parsing the request header's keys and values, including the
+	// request line. It does not limit the size of the request body.
+	// Default: 1 MB (1 << 20)
+	MaxHeaderBytes int
+
+	// ShutdownTimeout is the maximum duration to wait for graceful shutdown.
+	// Default: 30 seconds
+	ShutdownTimeout time.Duration
 }
 
-// DefaultServerConfig returns a default server configuration.
+// DefaultServerConfig returns a default server configuration with
+// production-grade security settings to protect against DoS attacks.
 func DefaultServerConfig() ServerConfig {
 	return ServerConfig{
 		Addr:          ":9090",
 		EnableMetrics: true,
 		EnablePprof:   true,
+
+		// DoS Protection Defaults
+		ReadTimeout:       10 * time.Second,  // Total request read timeout
+		ReadHeaderTimeout: 5 * time.Second,   // Protect against slow-loris attacks
+		WriteTimeout:      30 * time.Second,  // Response write timeout
+		IdleTimeout:       120 * time.Second, // Keep-alive timeout
+		MaxHeaderBytes:    1 << 20,           // 1 MB header limit
+		ShutdownTimeout:   30 * time.Second,  // Graceful shutdown timeout
 	}
 }
 
@@ -59,12 +102,40 @@ func (b *Bedrock) NewServer(cfg ServerConfig) *Server {
 		w.Write([]byte("ok"))
 	})
 
+	// Apply timeout defaults if not set
+	if cfg.ReadTimeout == 0 {
+		cfg.ReadTimeout = 10 * time.Second
+	}
+	if cfg.ReadHeaderTimeout == 0 {
+		cfg.ReadHeaderTimeout = 5 * time.Second
+	}
+	if cfg.WriteTimeout == 0 {
+		cfg.WriteTimeout = 30 * time.Second
+	}
+	if cfg.IdleTimeout == 0 {
+		cfg.IdleTimeout = 120 * time.Second
+	}
+	if cfg.MaxHeaderBytes == 0 {
+		cfg.MaxHeaderBytes = 1 << 20 // 1 MB
+	}
+	if cfg.ShutdownTimeout == 0 {
+		cfg.ShutdownTimeout = 30 * time.Second
+	}
+
 	return &Server{
-		bedrock: b,
-		mux:     mux,
+		bedrock:         b,
+		mux:             mux,
+		shutdownTimeout: cfg.ShutdownTimeout,
 		server: &http.Server{
 			Addr:    cfg.Addr,
 			Handler: mux,
+
+			// Security timeouts to prevent DoS attacks
+			ReadTimeout:       cfg.ReadTimeout,
+			ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+			WriteTimeout:      cfg.WriteTimeout,
+			IdleTimeout:       cfg.IdleTimeout,
+			MaxHeaderBytes:    cfg.MaxHeaderBytes,
 		},
 	}
 }
@@ -80,7 +151,15 @@ func (s *Server) Serve(ln net.Listener) error {
 }
 
 // Shutdown gracefully shuts down the server.
+// If the provided context does not have a deadline, a timeout context
+// is created using the configured ShutdownTimeout.
 func (s *Server) Shutdown(ctx context.Context) error {
+	// If no deadline set, apply shutdown timeout
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline && s.shutdownTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.shutdownTimeout)
+		defer cancel()
+	}
 	return s.server.Shutdown(ctx)
 }
 

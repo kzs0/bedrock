@@ -42,13 +42,9 @@ func main() {
 	)
 	defer close()
 
-	// Start observability server
+	// Start observability server with default security settings
 	b := bedrock.FromContext(ctx)
-	obsServer := b.NewServer(bedrock.ServerConfig{
-		Addr:          ":9090",
-		EnableMetrics: true,
-		EnablePprof:   true,
-	})
+	obsServer := b.NewServer(bedrock.DefaultServerConfig())
 	go func() {
 		log.Println("Observability server listening on :9090")
 		log.Println("  - Metrics: http://localhost:9090/metrics")
@@ -58,7 +54,7 @@ func main() {
 		}
 	}()
 
-	// Setup HTTP server
+	// Setup HTTP server with security timeouts
 	mux := http.NewServeMux()
 	mux.HandleFunc("/users", handleUsers)
 
@@ -67,6 +63,12 @@ func main() {
 	appServer := &http.Server{
 		Addr:    ":8080",
 		Handler: handler,
+		// Security timeouts to prevent DoS attacks
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MB
 	}
 
 	// Start background loop
