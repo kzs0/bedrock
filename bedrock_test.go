@@ -180,9 +180,9 @@ func TestAutomaticMetrics(t *testing.T) {
 	families := b.Metrics().Gather()
 
 	expectedMetrics := map[string]bool{
-		"test.operation_count":       false,
-		"test.operation_successes":   false,
-		"test.operation_duration_ms": false,
+		"test_operation_count":       false,
+		"test_operation_successes":   false,
+		"test_operation_duration_ms": false,
 	}
 
 	for _, fam := range families {

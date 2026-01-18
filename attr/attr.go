@@ -94,3 +94,8 @@ func NewEvent(name string, attrs ...Attr) Event {
 func (a Attr) String() string {
 	return a.Key + "=" + a.Value.String()
 }
+
+// WithKey returns a new attribute with the given key.
+func (a Attr) WithKey(key string) Attr {
+	return Attr{Key: key, Value: a.Value}
+}

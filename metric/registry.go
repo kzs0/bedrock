@@ -37,9 +37,9 @@ func (r *Registry) Counter(name, help string, labelNames ...string) *Counter {
 	}
 
 	// Sanitize label names
-	sanitizedLabels := make([]string, len(labelNames))
-	for i, label := range labelNames {
-		sanitizedLabels[i] = sanitizeName(label)
+	sanitizedLabels := make(map[string]struct{}, len(labelNames))
+	for _, label := range labelNames {
+		sanitizedLabels[sanitizeName(label)] = struct{}{}
 	}
 
 	c := &Counter{
@@ -65,9 +65,9 @@ func (r *Registry) Gauge(name, help string, labelNames ...string) *Gauge {
 	}
 
 	// Sanitize label names
-	sanitizedLabels := make([]string, len(labelNames))
-	for i, label := range labelNames {
-		sanitizedLabels[i] = sanitizeName(label)
+	sanitizedLabels := make(map[string]struct{}, len(labelNames))
+	for _, label := range labelNames {
+		sanitizedLabels[sanitizeName(label)] = struct{}{}
 	}
 
 	g := &Gauge{
@@ -97,9 +97,9 @@ func (r *Registry) Histogram(name, help string, buckets []float64, labelNames ..
 	}
 
 	// Sanitize label names
-	sanitizedLabels := make([]string, len(labelNames))
-	for i, label := range labelNames {
-		sanitizedLabels[i] = sanitizeName(label)
+	sanitizedLabels := make(map[string]struct{}, len(labelNames))
+	for _, label := range labelNames {
+		sanitizedLabels[sanitizeName(label)] = struct{}{}
 	}
 
 	h := &Histogram{
@@ -166,7 +166,7 @@ type Bucket struct {
 }
 
 // DefaultBuckets are the default histogram buckets.
-var DefaultBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}
+var DefaultBuckets = []float64{.5, 1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000}
 
 // sanitizeName converts metric/label names to valid Prometheus names.
 // Prometheus metric and label names must match [a-zA-Z_:][a-zA-Z0-9_:]*.

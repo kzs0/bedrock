@@ -13,7 +13,7 @@ type Histogram struct {
 	name       string
 	help       string
 	buckets    []float64
-	labelNames []string
+	labelNames map[string]struct{}
 	mu         sync.RWMutex
 	values     map[string]*histogramValue
 }
@@ -28,7 +28,17 @@ type histogramValue struct {
 
 // With returns a HistogramVec with the given label values.
 func (h *Histogram) With(labels ...attr.Attr) *HistogramVec {
-	key := labelsKey(labels)
+	labels_verified := make([]attr.Attr, 0, len(labels))
+	for _, label := range labels {
+		sanitized := sanitizeName(label.Key)
+		if _, ok := h.labelNames[sanitized]; !ok {
+			continue
+		}
+		label = label.WithKey(sanitized)
+		labels_verified = append(labels_verified, label)
+	}
+
+	key := labelsKey(labels_verified)
 
 	h.mu.RLock()
 	hv, ok := h.values[key]
@@ -47,7 +57,7 @@ func (h *Histogram) With(labels ...attr.Attr) *HistogramVec {
 	}
 
 	hv = &histogramValue{
-		labels:      attr.NewSet(labels...),
+		labels:      attr.NewSet(labels_verified...),
 		bucketCount: make([]atomic.Uint64, len(h.buckets)),
 	}
 	h.values[key] = hv

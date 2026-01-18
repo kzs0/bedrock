@@ -12,7 +12,7 @@ import (
 type Gauge struct {
 	name       string
 	help       string
-	labelNames []string
+	labelNames map[string]struct{}
 	mu         sync.RWMutex
 	values     map[string]*gaugeValue
 }
@@ -24,7 +24,17 @@ type gaugeValue struct {
 
 // With returns a GaugeVec with the given label values.
 func (g *Gauge) With(labels ...attr.Attr) *GaugeVec {
-	key := labelsKey(labels)
+	labels_verified := make([]attr.Attr, 0, len(labels))
+	for _, label := range labels {
+		sanitized := sanitizeName(label.Key)
+		if _, ok := g.labelNames[sanitized]; !ok {
+			continue
+		}
+		label = label.WithKey(sanitized)
+		labels_verified = append(labels_verified, label)
+	}
+
+	key := labelsKey(labels_verified)
 
 	g.mu.RLock()
 	gv, ok := g.values[key]
@@ -43,7 +53,7 @@ func (g *Gauge) With(labels ...attr.Attr) *GaugeVec {
 	}
 
 	gv = &gaugeValue{
-		labels: attr.NewSet(labels...),
+		labels: attr.NewSet(labels_verified...),
 	}
 	g.values[key] = gv
 	return &GaugeVec{value: gv}

@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/kzs0/bedrock/attr"
-	bloglog "github.com/kzs0/bedrock/log"
+	blog "github.com/kzs0/bedrock/log"
 	"github.com/kzs0/bedrock/metric"
 	"github.com/kzs0/bedrock/trace"
 	"github.com/kzs0/bedrock/trace/otlp"
@@ -16,7 +16,7 @@ import (
 type Bedrock struct {
 	config     Config
 	logger     *slog.Logger
-	logBridge  *bloglog.Bridge
+	logBridge  *blog.Bridge
 	tracer     *trace.Tracer
 	metrics    *metric.Registry
 	staticAttr attr.Set
@@ -47,7 +47,7 @@ func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 	}
 
 	// Setup logging
-	handler := bloglog.NewHandler(&bloglog.HandlerOptions{
+	handler := blog.NewHandler(&blog.HandlerOptions{
 		Level:  cfg.logLevel(),
 		Output: cfg.LogOutput,
 		Format: cfg.LogFormat,
@@ -60,7 +60,7 @@ func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 		return "", ""
 	})
 	b.logger = slog.New(handler)
-	b.logBridge = bloglog.NewBridge(b.logger)
+	b.logBridge = blog.NewBridge(b.logger)
 
 	// Setup tracing
 	var exporter trace.Exporter

@@ -12,7 +12,7 @@ import (
 type Counter struct {
 	name       string
 	help       string
-	labelNames []string
+	labelNames map[string]struct{}
 	mu         sync.RWMutex
 	values     map[string]*counterValue
 }
@@ -24,7 +24,17 @@ type counterValue struct {
 
 // With returns a CounterVec with the given label values.
 func (c *Counter) With(labels ...attr.Attr) *CounterVec {
-	key := labelsKey(labels)
+	labels_verified := make([]attr.Attr, 0, len(labels))
+	for _, label := range labels {
+		sanitized := sanitizeName(label.Key)
+		if _, ok := c.labelNames[sanitized]; !ok {
+			continue
+		}
+		label = label.WithKey(sanitized)
+		labels_verified = append(labels_verified, label)
+	}
+
+	key := labelsKey(labels_verified)
 
 	c.mu.RLock()
 	cv, ok := c.values[key]
@@ -43,7 +53,7 @@ func (c *Counter) With(labels ...attr.Attr) *CounterVec {
 	}
 
 	cv = &counterValue{
-		labels: attr.NewSet(labels...),
+		labels: attr.NewSet(labels_verified...),
 	}
 	c.values[key] = cv
 	return &CounterVec{value: cv}

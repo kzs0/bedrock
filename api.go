@@ -104,13 +104,6 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 		cfg.name = source.name + "." + fullName
 	}
 
-	// Inherit parent metric labels if not specified
-	if parent != nil && len(cfg.metricLabels) == 0 {
-		parent.mu.Lock()
-		cfg.metricLabels = parent.metricLabels
-		parent.mu.Unlock()
-	}
-
 	// Start trace span
 	var parentCtx context.Context
 	if parent != nil && parent.span != nil {
