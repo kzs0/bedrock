@@ -1,2 +1,11 @@
-.*/
-.DS_STORE
+# IDE and Editor files
+.vscode/
+.idea/
+
+# Claude Code and AI assistants
+.claude/
+.cursor/
+.prompts/
+
+# macOS
+.DS_Store

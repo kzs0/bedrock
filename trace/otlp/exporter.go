@@ -87,7 +87,7 @@ func (e *Exporter) ExportSpans(ctx context.Context, spans []*trace.Span) error {
 	if err != nil {
 		return fmt.Errorf("otlp: failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Check response
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

@@ -9,10 +9,18 @@ import (
 	"github.com/kzs0/bedrock/attr"
 )
 
+type testContextKey string
+
+const (
+	userIDKey    testContextKey = "user_id"
+	authTokenKey testContextKey = "auth_token"
+	requestIDKey testContextKey = "request_id"
+)
+
 func TestHTTPMiddleware_PreservesRequestContext(t *testing.T) {
 	// Setup: Create bedrock and base context
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -21,10 +29,10 @@ func TestHTTPMiddleware_PreservesRequestContext(t *testing.T) {
 	var capturedAuthToken string
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify context values are preserved
-		if userID := r.Context().Value("user_id"); userID != nil {
+		if userID := r.Context().Value(userIDKey); userID != nil {
 			capturedUserID = userID.(string)
 		}
-		if token := r.Context().Value("auth_token"); token != nil {
+		if token := r.Context().Value(authTokenKey); token != nil {
 			capturedAuthToken = token.(string)
 		}
 		w.WriteHeader(http.StatusOK)
@@ -35,8 +43,8 @@ func TestHTTPMiddleware_PreservesRequestContext(t *testing.T) {
 
 	// Execute: Send request with context values
 	req := httptest.NewRequest("GET", "/test", nil)
-	reqCtx := context.WithValue(req.Context(), "user_id", "user-123")
-	reqCtx = context.WithValue(reqCtx, "auth_token", "token-abc")
+	reqCtx := context.WithValue(req.Context(), userIDKey, "user-123")
+	reqCtx = context.WithValue(reqCtx, authTokenKey, "token-abc")
 	req = req.WithContext(reqCtx)
 
 	rr := httptest.NewRecorder()
@@ -54,7 +62,7 @@ func TestHTTPMiddleware_PreservesRequestContext(t *testing.T) {
 func TestHTTPMiddleware_AddsBedrock(t *testing.T) {
 	// Setup: Create bedrock and base context
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -85,7 +93,7 @@ func TestHTTPMiddleware_AddsBedrock(t *testing.T) {
 func TestHTTPMiddleware_MultipleContextValues(t *testing.T) {
 	// Setup: Create bedrock
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -97,13 +105,13 @@ func TestHTTPMiddleware_MultipleContextValues(t *testing.T) {
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedBedrock = FromContext(r.Context())
-		if userID := r.Context().Value("user_id"); userID != nil {
+		if userID := r.Context().Value(userIDKey); userID != nil {
 			capturedUserID = userID.(string)
 		}
-		if token := r.Context().Value("auth_token"); token != nil {
+		if token := r.Context().Value(authTokenKey); token != nil {
 			capturedAuthToken = token.(string)
 		}
-		if reqID := r.Context().Value("request_id"); reqID != nil {
+		if reqID := r.Context().Value(requestIDKey); reqID != nil {
 			capturedRequestID = reqID.(string)
 		}
 		w.WriteHeader(http.StatusOK)
@@ -114,9 +122,9 @@ func TestHTTPMiddleware_MultipleContextValues(t *testing.T) {
 
 	// Execute: Send request with multiple context values
 	req := httptest.NewRequest("GET", "/test", nil)
-	reqCtx := context.WithValue(req.Context(), "user_id", "user-456")
-	reqCtx = context.WithValue(reqCtx, "auth_token", "token-xyz")
-	reqCtx = context.WithValue(reqCtx, "request_id", "req-789")
+	reqCtx := context.WithValue(req.Context(), userIDKey, "user-456")
+	reqCtx = context.WithValue(reqCtx, authTokenKey, "token-xyz")
+	reqCtx = context.WithValue(reqCtx, requestIDKey, "req-789")
 	req = req.WithContext(reqCtx)
 
 	rr := httptest.NewRecorder()
@@ -142,7 +150,7 @@ func TestHTTPMiddleware_MultipleContextValues(t *testing.T) {
 
 func TestHTTPMiddleware_OperationCreated(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -188,7 +196,7 @@ func TestHTTPMiddleware_OperationCreated(t *testing.T) {
 
 func TestHTTPMiddleware_CustomOperationName(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -216,7 +224,7 @@ func TestHTTPMiddleware_CustomOperationName(t *testing.T) {
 
 func TestHTTPMiddleware_StatusCodeCapture(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -253,7 +261,7 @@ func TestHTTPMiddleware_StatusCodeCapture(t *testing.T) {
 
 func TestHTTPMiddleware_AdditionalAttrs(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -298,7 +306,7 @@ func TestHTTPMiddleware_MiddlewareChain(t *testing.T) {
 	// 4. Handler
 
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -308,10 +316,10 @@ func TestHTTPMiddleware_MiddlewareChain(t *testing.T) {
 
 	// Final handler
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if userID := r.Context().Value("user_id"); userID != nil {
+		if userID := r.Context().Value(userIDKey); userID != nil {
 			capturedUserID = userID.(string)
 		}
-		if reqID := r.Context().Value("request_id"); reqID != nil {
+		if reqID := r.Context().Value(requestIDKey); reqID != nil {
 			capturedRequestID = reqID.(string)
 		}
 		capturedBedrock = FromContext(r.Context())
@@ -325,7 +333,7 @@ func TestHTTPMiddleware_MiddlewareChain(t *testing.T) {
 	// 2. Request ID middleware
 	requestIDMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := context.WithValue(r.Context(), "request_id", "req-12345")
+			ctx := context.WithValue(r.Context(), requestIDKey, "req-12345")
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -334,7 +342,7 @@ func TestHTTPMiddleware_MiddlewareChain(t *testing.T) {
 	// 1. Auth middleware
 	authMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := context.WithValue(r.Context(), "user_id", "user-abc")
+			ctx := context.WithValue(r.Context(), userIDKey, "user-abc")
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

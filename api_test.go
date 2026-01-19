@@ -11,7 +11,7 @@ import (
 
 func TestCounter(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -57,7 +57,7 @@ func TestCounterNoop(t *testing.T) {
 
 func TestGauge(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -105,7 +105,7 @@ func TestGaugeNoop(t *testing.T) {
 
 func TestHistogram(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -145,7 +145,7 @@ func TestHistogram(t *testing.T) {
 
 func TestHistogramWithCustomBuckets(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -191,10 +191,10 @@ func TestDebug(t *testing.T) {
 	var buf bytes.Buffer
 	ctx, close := Init(context.Background(),
 		WithConfig(Config{
-			ServiceName: "test-service",
-			LogLevel:    "debug",
-			LogFormat:   "json",
-			LogOutput:   &buf,
+			Service:   "test-service",
+			LogLevel:  "debug",
+			LogFormat: "json",
+			LogOutput: &buf,
 		}),
 	)
 	defer close()
@@ -217,10 +217,10 @@ func TestInfo(t *testing.T) {
 	var buf bytes.Buffer
 	ctx, close := Init(context.Background(),
 		WithConfig(Config{
-			ServiceName: "test-service",
-			LogLevel:    "info",
-			LogFormat:   "json",
-			LogOutput:   &buf,
+			Service:   "test-service",
+			LogLevel:  "info",
+			LogFormat: "json",
+			LogOutput: &buf,
 		}),
 	)
 	defer close()
@@ -243,10 +243,10 @@ func TestWarn(t *testing.T) {
 	var buf bytes.Buffer
 	ctx, close := Init(context.Background(),
 		WithConfig(Config{
-			ServiceName: "test-service",
-			LogLevel:    "warn",
-			LogFormat:   "json",
-			LogOutput:   &buf,
+			Service:   "test-service",
+			LogLevel:  "warn",
+			LogFormat: "json",
+			LogOutput: &buf,
 		}),
 	)
 	defer close()
@@ -266,10 +266,10 @@ func TestError(t *testing.T) {
 	var buf bytes.Buffer
 	ctx, close := Init(context.Background(),
 		WithConfig(Config{
-			ServiceName: "test-service",
-			LogLevel:    "error",
-			LogFormat:   "json",
-			LogOutput:   &buf,
+			Service:   "test-service",
+			LogLevel:  "error",
+			LogFormat: "json",
+			LogOutput: &buf,
 		}),
 	)
 	defer close()
@@ -289,10 +289,10 @@ func TestLog(t *testing.T) {
 	var buf bytes.Buffer
 	ctx, close := Init(context.Background(),
 		WithConfig(Config{
-			ServiceName: "test-service",
-			LogLevel:    "debug",
-			LogFormat:   "json",
-			LogOutput:   &buf,
+			Service:   "test-service",
+			LogLevel:  "debug",
+			LogFormat: "json",
+			LogOutput: &buf,
 		}),
 	)
 	defer close()
@@ -315,10 +315,10 @@ func TestLoggingWithStaticAttrs(t *testing.T) {
 	var buf bytes.Buffer
 	ctx, close := Init(context.Background(),
 		WithConfig(Config{
-			ServiceName: "test-service",
-			LogLevel:    "info",
-			LogFormat:   "json",
-			LogOutput:   &buf,
+			Service:   "test-service",
+			LogLevel:  "info",
+			LogFormat: "json",
+			LogOutput: &buf,
 		}),
 		WithStaticAttrs(attr.String("env", "test"), attr.String("version", "1.0")),
 	)
@@ -349,7 +349,7 @@ func TestLoggingNoop(t *testing.T) {
 
 func TestMetricsSameName(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -366,10 +366,10 @@ func TestStaticAttributesInLogs(t *testing.T) {
 	var buf bytes.Buffer
 	ctx, close := Init(context.Background(),
 		WithConfig(Config{
-			ServiceName: "test-service",
-			LogLevel:    "info",
-			LogFormat:   "json",
-			LogOutput:   &buf,
+			Service:   "test-service",
+			LogLevel:  "info",
+			LogFormat: "json",
+			LogOutput: &buf,
 		}),
 		WithStaticAttrs(
 			attr.String("env", "production"),
