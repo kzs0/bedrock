@@ -37,7 +37,7 @@ func main() {
 		bedrock.WithConfig(cfg.Bedrock),
 		bedrock.WithStaticAttrs(
 			attr.String("env", "development"),
-			attr.String("bedrock.version", "1.0.0"),
+			attr.String("bedrock.version", "0.1.0"),
 		),
 	)
 	defer close()
