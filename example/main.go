@@ -130,7 +130,7 @@ func handleUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bedrock.Info(ctx, "request completed successfully", attr.String("result", result))
-	fmt.Fprintf(w, "Result: %s\n", result)
+	_, _ = fmt.Fprintf(w, "Result: %s\n", result)
 }
 
 func loop(ctx context.Context, term time.Duration) error {

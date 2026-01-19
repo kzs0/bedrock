@@ -90,11 +90,11 @@ func TestParseRequired(t *testing.T) {
 }
 
 func TestParseWithPrefix(t *testing.T) {
-	os.Setenv("MYAPP_HOST", "prefixed.com")
-	os.Setenv("MYAPP_PORT", "4000")
+	_ = os.Setenv("MYAPP_HOST", "prefixed.com")
+	_ = os.Setenv("MYAPP_PORT", "4000")
 	defer func() {
-		os.Unsetenv("MYAPP_HOST")
-		os.Unsetenv("MYAPP_PORT")
+		_ = os.Unsetenv("MYAPP_HOST")
+		_ = os.Unsetenv("MYAPP_PORT")
 	}()
 
 	cfg, err := ParseWithPrefix[SimpleConfig]("MYAPP_")
@@ -111,13 +111,13 @@ func TestParseWithPrefix(t *testing.T) {
 }
 
 func TestParseNested(t *testing.T) {
-	os.Setenv("APP_NAME", "myapp")
-	os.Setenv("DB_HOST", "db.example.com")
-	os.Setenv("DB_PORT", "5432")
+	_ = os.Setenv("APP_NAME", "myapp")
+	_ = os.Setenv("DB_HOST", "db.example.com")
+	_ = os.Setenv("DB_PORT", "5432")
 	defer func() {
-		os.Unsetenv("APP_NAME")
-		os.Unsetenv("DB_HOST")
-		os.Unsetenv("DB_PORT")
+		_ = os.Unsetenv("APP_NAME")
+		_ = os.Unsetenv("DB_HOST")
+		_ = os.Unsetenv("DB_PORT")
 	}()
 
 	cfg, err := Parse[NestedConfig]()
@@ -137,21 +137,21 @@ func TestParseNested(t *testing.T) {
 }
 
 func TestParseTypes(t *testing.T) {
-	os.Setenv("STRING", "hello")
-	os.Setenv("INT", "42")
-	os.Setenv("INT64", "9223372036854775807")
-	os.Setenv("FLOAT", "3.14")
-	os.Setenv("BOOL", "true")
-	os.Setenv("DURATION", "5s")
-	os.Setenv("STRINGS", "a,b,c")
+	_ = os.Setenv("STRING", "hello")
+	_ = os.Setenv("INT", "42")
+	_ = os.Setenv("INT64", "9223372036854775807")
+	_ = os.Setenv("FLOAT", "3.14")
+	_ = os.Setenv("BOOL", "true")
+	_ = os.Setenv("DURATION", "5s")
+	_ = os.Setenv("STRINGS", "a,b,c")
 	defer func() {
-		os.Unsetenv("STRING")
-		os.Unsetenv("INT")
-		os.Unsetenv("INT64")
-		os.Unsetenv("FLOAT")
-		os.Unsetenv("BOOL")
-		os.Unsetenv("DURATION")
-		os.Unsetenv("STRINGS")
+		_ = os.Unsetenv("STRING")
+		_ = os.Unsetenv("INT")
+		_ = os.Unsetenv("INT64")
+		_ = os.Unsetenv("FLOAT")
+		_ = os.Unsetenv("BOOL")
+		_ = os.Unsetenv("DURATION")
+		_ = os.Unsetenv("STRINGS")
 	}()
 
 	cfg, err := Parse[TypesConfig]()
