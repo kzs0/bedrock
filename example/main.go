@@ -29,10 +29,12 @@ func main() {
 			Bedrock:  bedrock.DefaultConfig(),
 			LoopTerm: 10 * time.Second,
 		}
-		cfg.Bedrock.ServiceName = "example-service"
+		cfg.Bedrock.Service = "example-service"
+		// Enable observability server
+		cfg.Bedrock.ServerEnabled = true
 	}
 
-	// Initialize bedrock
+	// Initialize bedrock - obs server starts automatically if enabled in config
 	ctx, close := bedrock.Init(ctx,
 		bedrock.WithConfig(cfg.Bedrock),
 		bedrock.WithStaticAttrs(
@@ -42,31 +44,23 @@ func main() {
 	)
 	defer close()
 
-	// Start observability server with default security settings
-	b := bedrock.FromContext(ctx)
-	obsServer := b.NewServer(bedrock.DefaultServerConfig())
-	go func() {
-		log.Println("Observability server listening on :9090")
-		log.Println("  - Metrics: http://localhost:9090/metrics")
-		log.Println("  - Health:  http://localhost:9090/health")
-		log.Println("  - Pprof:   http://localhost:9090/debug/pprof/")
-		log.Println("")
-		log.Println("Profiling:")
-		log.Println("  Manual profiling:")
-		log.Println("    - CPU profile (30s):  curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30")
-		log.Println("    - Heap profile:       curl -o heap.prof http://localhost:9090/debug/pprof/heap")
-		log.Println("    - Goroutine profile:  curl -o goroutine.prof http://localhost:9090/debug/pprof/goroutine")
-		log.Println("    - Analyze profile:    go tool pprof cpu.prof")
-		log.Println("")
-		log.Println("  Continuous profiling with Pyroscope + Grafana:")
-		log.Println("    1. Start: docker-compose up -d")
-		log.Println("    2. View:  http://localhost:3000 (Grafana)")
-		log.Println("    3. Pyroscope will scrape pprof endpoints every 15s")
-		log.Println("")
-		if err := obsServer.ListenAndServe(); err != http.ErrServerClosed {
-			log.Printf("Observability server error: %v", err)
-		}
-	}()
+	log.Println("Observability server listening on :9090")
+	log.Println("  - Metrics: http://localhost:9090/metrics")
+	log.Println("  - Health:  http://localhost:9090/health")
+	log.Println("  - Pprof:   http://localhost:9090/debug/pprof/")
+	log.Println("")
+	log.Println("Profiling:")
+	log.Println("  Manual profiling:")
+	log.Println("    - CPU profile (30s):  curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30")
+	log.Println("    - Heap profile:       curl -o heap.prof http://localhost:9090/debug/pprof/heap")
+	log.Println("    - Goroutine profile:  curl -o goroutine.prof http://localhost:9090/debug/pprof/goroutine")
+	log.Println("    - Analyze profile:    go tool pprof cpu.prof")
+	log.Println("")
+	log.Println("  Continuous profiling with Pyroscope + Grafana:")
+	log.Println("    1. Start: docker-compose up -d")
+	log.Println("    2. View:  http://localhost:3000 (Grafana)")
+	log.Println("    3. Pyroscope will scrape pprof endpoints every 15s")
+	log.Println("")
 
 	// Setup HTTP server with security timeouts
 	mux := http.NewServeMux()
@@ -111,7 +105,6 @@ func main() {
 	defer cancel()
 
 	appServer.Shutdown(shutdownCtx)
-	obsServer.Shutdown(shutdownCtx)
 
 	log.Println("Goodbye!")
 }

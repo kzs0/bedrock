@@ -199,7 +199,7 @@ func (op *operationState) end() {
 	op.recordMetrics()
 
 	// Canonical log if enabled
-	if op.bedrock.config.CanonicalLog && !op.bedrock.isNoop {
+	if op.bedrock.config.LogCanonical && !op.bedrock.isNoop {
 		op.logCanonical()
 	}
 }

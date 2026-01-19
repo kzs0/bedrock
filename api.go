@@ -101,6 +101,9 @@ func (h *HistogramWithStatic) Observe(v float64) {
 // Init initializes bedrock in the context and returns a context with bedrock attached
 // and a cleanup function. If no config is provided, it loads from environment variables.
 //
+// The observability server is automatically started if Config.ServerEnabled is true.
+// Set ServerEnabled to true in your config to enable automatic server startup.
+//
 // Usage:
 //
 //	ctx, close := bedrock.Init(ctx, bedrock.WithConfig(cfg))
@@ -125,9 +128,32 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 
 	ctx = WithBedrock(ctx, b)
 
+	// Automatically create and start obs server if enabled in config
+	var obsServer *Server
+	if cfg.config.ServerEnabled {
+		serverCfg := cfg.config.serverConfig()
+		obsServer = b.NewServer(serverCfg)
+		go func() {
+			if err := obsServer.ListenAndServe(); err != nil {
+				// Only log if it's not a graceful shutdown
+				if err.Error() != "http: Server closed" {
+					b.logger.Error("observability server error", slog.Any("error", err))
+				}
+			}
+		}()
+	}
+
 	cleanup := func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.config.ShutdownTimeout)
 		defer cancel()
+
+		// Shutdown obs server first if it exists
+		if obsServer != nil {
+			if err := obsServer.Shutdown(shutdownCtx); err != nil {
+				b.logger.Error("failed to shutdown observability server", slog.Any("error", err))
+			}
+		}
+
 		b.Shutdown(shutdownCtx)
 	}
 

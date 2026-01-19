@@ -10,7 +10,7 @@ import (
 
 func TestInit(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -32,7 +32,7 @@ func TestInit(t *testing.T) {
 
 func TestOperation(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -58,7 +58,7 @@ func TestOperation(t *testing.T) {
 
 func TestNestedOperations(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -83,7 +83,7 @@ func TestNestedOperations(t *testing.T) {
 
 func TestRegister(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -102,7 +102,7 @@ func TestRegister(t *testing.T) {
 
 func TestRegisterError(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -126,7 +126,7 @@ func TestRegisterError(t *testing.T) {
 
 func TestSource(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -164,7 +164,7 @@ func TestSource(t *testing.T) {
 
 func TestAutomaticMetrics(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -219,7 +219,7 @@ func TestAutomaticMetrics(t *testing.T) {
 
 func TestMetricLabelDefaults(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -260,7 +260,7 @@ func TestMetricLabelDefaults(t *testing.T) {
 
 func TestStep(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -312,7 +312,7 @@ func TestNoopBedrock(t *testing.T) {
 
 func TestStaticAttributesInMetrics(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 		WithStaticAttrs(
 			attr.String("env", "test"),
 			attr.String("region", "us-west-2"),

@@ -30,8 +30,8 @@ type Bedrock struct {
 // New creates a new Bedrock instance with the given configuration.
 func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 	// Apply defaults
-	if cfg.ServiceName == "" {
-		cfg.ServiceName = "unknown"
+	if cfg.Service == "" {
+		cfg.Service = "unknown"
 	}
 	if cfg.ShutdownTimeout == 0 {
 		cfg.ShutdownTimeout = DefaultConfig().ShutdownTimeout
@@ -77,10 +77,10 @@ func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 
 	// Setup tracing
 	var exporter trace.Exporter
-	if cfg.TraceEndpoint != "" {
+	if cfg.TraceURL != "" {
 		b.exporter = otlp.NewExporter(otlp.ExporterConfig{
-			Endpoint:    cfg.TraceEndpoint,
-			ServiceName: cfg.ServiceName,
+			Endpoint:    cfg.TraceURL,
+			ServiceName: cfg.Service,
 			Resource:    b.staticAttr,
 		})
 		b.batchProcessor = otlp.NewBatchProcessor(b.exporter, otlp.DefaultBatchConfig())
@@ -98,7 +98,7 @@ func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 	}
 
 	b.tracer = trace.NewTracer(trace.TracerConfig{
-		ServiceName: cfg.ServiceName,
+		ServiceName: cfg.Service,
 		Resource:    b.staticAttr,
 		Sampler:     sampler,
 		Exporter:    exporter,

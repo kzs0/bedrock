@@ -102,9 +102,9 @@ defer close()
 // With explicit config
 ctx, close := bedrock.Init(ctx,
     bedrock.WithConfig(bedrock.Config{
-        ServiceName: "my-service",
-        LogLevel:    "info",
-        LogFormat:   "json",
+        Service:   "my-service",
+        LogLevel:  "info",
+        LogFormat: "json",
     }),
     bedrock.WithStaticAttrs(
         attr.String("env", "production"),
@@ -403,36 +403,50 @@ hist.Observe(100) // Uses static labels only
 
 ```bash
 # Service identification
-SERVICE_NAME=my-service
+BEDROCK_SERVICE=my-service
 
 # Tracing
-TRACE_ENDPOINT=http://localhost:4318/v1/traces
-OTEL_TRACES_SAMPLER_ARG=1.0  # 0.0 to 1.0
+BEDROCK_TRACE_URL=http://localhost:4318/v1/traces
+BEDROCK_TRACE_SAMPLE_RATE=1.0  # 0.0 to 1.0
 
 # Logging
-LOG_LEVEL=info               # debug, info, warn, error
-LOG_FORMAT=json              # json or text
-CANONICAL_LOG=true           # Enable operation lifecycle logs
+BEDROCK_LOG_LEVEL=info         # debug, info, warn, error
+BEDROCK_LOG_FORMAT=json        # json or text
+BEDROCK_LOG_CANONICAL=true     # Enable operation lifecycle logs
 
 # Metrics
-METRIC_PREFIX=myapp          # Prefix for all metrics
-HISTOGRAM_BUCKETS=5,10,25,50,100,250,500,1000  # Custom buckets (ms)
+BEDROCK_METRIC_PREFIX=myapp    # Prefix for all metrics
+BEDROCK_METRIC_BUCKETS=5,10,25,50,100,250,500,1000  # Custom buckets (ms)
+
+# Server (observability endpoints)
+BEDROCK_SERVER_ENABLED=false   # Auto-start server
+BEDROCK_SERVER_ADDR=:9090      # Server address
+BEDROCK_SERVER_METRICS=true    # Enable /metrics
+BEDROCK_SERVER_PPROF=true      # Enable /debug/pprof
+BEDROCK_SERVER_READ_TIMEOUT=10s
+BEDROCK_SERVER_READ_HEADER_TIMEOUT=5s
+BEDROCK_SERVER_WRITE_TIMEOUT=30s
+BEDROCK_SERVER_IDLE_TIMEOUT=120s
+BEDROCK_SERVER_MAX_HEADER_BYTES=1048576  # 1 MB
 
 # Shutdown
-SHUTDOWN_TIMEOUT=30s         # Graceful shutdown timeout
+BEDROCK_SHUTDOWN_TIMEOUT=30s   # Graceful shutdown timeout
 ```
 
 ### Programmatic
 
 ```go
 cfg := bedrock.Config{
-    ServiceName:     "my-service",
-    TraceEndpoint:   "http://localhost:4318/v1/traces",
+    Service:         "my-service",
+    TraceURL:        "http://localhost:4318/v1/traces",
+    TraceSampleRate: 1.0,
     LogLevel:        "info",
     LogFormat:       "json",
-    CanonicalLog:    true,
+    LogCanonical:    true,
+    MetricPrefix:    "myapp",
+    ServerEnabled:   true,
+    ServerAddr:      ":9090",
     ShutdownTimeout: 30 * time.Second,
-    TraceSampleRate: 1.0,
 }
 
 ctx, close := bedrock.Init(ctx, bedrock.WithConfig(cfg))
@@ -650,7 +664,7 @@ Enable complete operation lifecycle logging for analysis:
 
 ```go
 // Set environment variable
-os.Setenv("CANONICAL_LOG", "true")
+os.Setenv("BEDROCK_LOG_CANONICAL", "true")
 
 ctx, close := bedrock.Init(context.Background())
 defer close()
@@ -666,7 +680,7 @@ op.Register(ctx, attr.String("status", "active"))
 **Output** (when operation completes):
 ```json
 {
-  "time": "2024-01-18T12:34:56Z",
+  "time": "2026-01-18T12:34:56Z",
   "level": "INFO",
   "msg": "operation completed",
   "operation": "process_user",

@@ -12,7 +12,7 @@ import (
 func TestHTTPMiddleware_PreservesRequestContext(t *testing.T) {
 	// Setup: Create bedrock and base context
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -54,7 +54,7 @@ func TestHTTPMiddleware_PreservesRequestContext(t *testing.T) {
 func TestHTTPMiddleware_AddsBedrock(t *testing.T) {
 	// Setup: Create bedrock and base context
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -85,7 +85,7 @@ func TestHTTPMiddleware_AddsBedrock(t *testing.T) {
 func TestHTTPMiddleware_MultipleContextValues(t *testing.T) {
 	// Setup: Create bedrock
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -142,7 +142,7 @@ func TestHTTPMiddleware_MultipleContextValues(t *testing.T) {
 
 func TestHTTPMiddleware_OperationCreated(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -188,7 +188,7 @@ func TestHTTPMiddleware_OperationCreated(t *testing.T) {
 
 func TestHTTPMiddleware_CustomOperationName(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -216,7 +216,7 @@ func TestHTTPMiddleware_CustomOperationName(t *testing.T) {
 
 func TestHTTPMiddleware_StatusCodeCapture(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -253,7 +253,7 @@ func TestHTTPMiddleware_StatusCodeCapture(t *testing.T) {
 
 func TestHTTPMiddleware_AdditionalAttrs(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 
@@ -298,7 +298,7 @@ func TestHTTPMiddleware_MiddlewareChain(t *testing.T) {
 	// 4. Handler
 
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{ServiceName: "test-service"}),
+		WithConfig(Config{Service: "test-service"}),
 	)
 	defer close()
 

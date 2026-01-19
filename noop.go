@@ -28,7 +28,7 @@ func noopBedrock() *Bedrock {
 
 		noopInstance = &Bedrock{
 			config: Config{
-				ServiceName: "noop",
+				Service: "noop",
 			},
 			logger:     slog.New(handler),
 			logBridge:  bloglog.NewBridge(slog.New(handler)),
