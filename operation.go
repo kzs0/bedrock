@@ -79,26 +79,6 @@ func (op *operationState) setAttr(attrs ...attr.Attr) {
 	}
 }
 
-// markSuccess marks the operation as successful.
-func (op *operationState) markSuccess() {
-	op.mu.Lock()
-	defer op.mu.Unlock()
-	op.success = true
-	op.failure = nil
-}
-
-// markFailure marks the operation as failed.
-func (op *operationState) markFailure(err error) {
-	op.mu.Lock()
-	defer op.mu.Unlock()
-	op.success = false
-	op.failure = err
-
-	if op.span != nil && err != nil {
-		op.span.RecordError(err)
-	}
-}
-
 // buildMetricLabels builds the metric labels from registered names.
 // If a label name was registered but no attribute with that key exists, uses "_".
 // Static attributes are automatically included as labels.

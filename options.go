@@ -75,19 +75,6 @@ func EndFailure(err error) EndOption {
 	}
 }
 
-// applyEndOptions applies end options.
-func applyEndOptions(opts []EndOption) endConfig {
-	cfg := endConfig{
-		success: false,
-		failure: nil,
-		hasOpts: false,
-	}
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-	return cfg
-}
-
 // applyOperationOptions applies options to create an operation config.
 func applyOperationOptions(name string, opts []OperationOption) operationConfig {
 	cfg := operationConfig{

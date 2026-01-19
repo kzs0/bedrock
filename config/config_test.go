@@ -50,11 +50,11 @@ func TestParseDefaults(t *testing.T) {
 }
 
 func TestParseFromEnv(t *testing.T) {
-	os.Setenv("HOST", "example.com")
-	os.Setenv("PORT", "3000")
+	_ = os.Setenv("HOST", "example.com")
+	_ = os.Setenv("PORT", "3000")
 	defer func() {
-		os.Unsetenv("HOST")
-		os.Unsetenv("PORT")
+		_ = os.Unsetenv("HOST")
+		_ = os.Unsetenv("PORT")
 	}()
 
 	cfg, err := Parse[SimpleConfig]()
@@ -76,8 +76,8 @@ func TestParseRequired(t *testing.T) {
 		t.Fatal("expected error for missing required field")
 	}
 
-	os.Setenv("NAME", "test")
-	defer os.Unsetenv("NAME")
+	_ = os.Setenv("NAME", "test")
+	defer func() { _ = os.Unsetenv("NAME") }()
 
 	cfg, err := Parse[RequiredConfig]()
 	if err != nil {

@@ -55,18 +55,18 @@ func Encode(w io.Writer, families []metric.MetricFamily) error {
 // writeMetricLine writes a metric with labels.
 func writeMetricLine(w io.Writer, name string, labelPairs [][2]string, value float64) {
 	if len(labelPairs) == 0 {
-		fmt.Fprintf(w, "%s %s\n", name, formatFloat(value))
+		_, _ = fmt.Fprintf(w, "%s %s\n", name, formatFloat(value))
 		return
 	}
 
-	fmt.Fprintf(w, "%s{", name)
+	_, _ = fmt.Fprintf(w, "%s{", name)
 	for i, pair := range labelPairs {
 		if i > 0 {
-			fmt.Fprint(w, ",")
+			_, _ = fmt.Fprint(w, ",")
 		}
-		fmt.Fprintf(w, "%s=%q", pair[0], pair[1])
+		_, _ = fmt.Fprintf(w, "%s=%q", pair[0], pair[1])
 	}
-	fmt.Fprintf(w, "} %s\n", formatFloat(value))
+	_, _ = fmt.Fprintf(w, "} %s\n", formatFloat(value))
 }
 
 // writeHistogram writes histogram buckets, sum, and count.

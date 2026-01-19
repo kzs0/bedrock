@@ -45,7 +45,7 @@ func TestNestedSpans(t *testing.T) {
 	ctx, parent := tracer.Start(context.Background(), "parent")
 	defer parent.End()
 
-	ctx, child := tracer.Start(ctx, "child")
+	_, child := tracer.Start(ctx, "child")
 	defer child.End()
 
 	if child.TraceID() != parent.TraceID() {

@@ -110,7 +110,9 @@ func (bp *BatchProcessor) exportLocked() {
 	bp.queue = make([]*trace.Span, 0, bp.cfg.BatchSize)
 
 	// Export in background
-	go bp.exporter.ExportSpans(context.Background(), spans)
+	go func() {
+		_ = bp.exporter.ExportSpans(context.Background(), spans)
+	}()
 }
 
 // Shutdown stops the processor and exports remaining spans.

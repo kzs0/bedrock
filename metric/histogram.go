@@ -23,7 +23,6 @@ type histogramValue struct {
 	bucketCount []atomic.Uint64 // count for each bucket
 	count       atomic.Uint64   // total count
 	sumBits     atomic.Uint64   // sum stored as float64 bits
-	mu          sync.Mutex      // protects sum updates
 }
 
 // With returns a HistogramVec with the given label values.

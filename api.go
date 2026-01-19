@@ -154,7 +154,9 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 			}
 		}
 
-		b.Shutdown(shutdownCtx)
+		if err := b.Shutdown(shutdownCtx); err != nil {
+			b.logger.Error("failed to shutdown bedrock", slog.Any("error", err))
+		}
 	}
 
 	return ctx, cleanup

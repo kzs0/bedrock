@@ -14,14 +14,14 @@ type SpanID [8]byte
 // NewTraceID generates a new random trace ID.
 func NewTraceID() TraceID {
 	var id TraceID
-	rand.Read(id[:])
+	_, _ = rand.Read(id[:])
 	return id
 }
 
 // NewSpanID generates a new random span ID.
 func NewSpanID() SpanID {
 	var id SpanID
-	rand.Read(id[:])
+	_, _ = rand.Read(id[:])
 	return id
 }
 

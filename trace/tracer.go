@@ -2,7 +2,6 @@ package trace
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/kzs0/bedrock/attr"
@@ -17,7 +16,6 @@ type Exporter interface {
 
 // Tracer creates spans and manages trace context.
 type Tracer struct {
-	mu          sync.Mutex
 	serviceName string
 	resource    attr.Set
 	sampler     Sampler
@@ -114,7 +112,9 @@ func (t *Tracer) export(span *Span) {
 		return
 	}
 	// Export asynchronously to not block the caller
-	go t.exporter.ExportSpans(context.Background(), []*Span{span})
+	go func() {
+		_ = t.exporter.ExportSpans(context.Background(), []*Span{span})
+	}()
 }
 
 // Shutdown shuts down the tracer and flushes any pending spans.

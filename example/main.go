@@ -104,7 +104,9 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	appServer.Shutdown(shutdownCtx)
+	if err := appServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("Application server shutdown error: %v", err)
+	}
 
 	log.Println("Goodbye!")
 }
