@@ -1,0 +1,131 @@
+# Bedrock Full-Stack Observability Example
+# Use `just` to see all available commands
+
+# Default recipe to display help
+default:
+    @just --list
+
+# Start the observability stack
+up:
+    docker compose up -d
+    @echo ""
+    @echo "🚀 Stack is starting up..."
+    @echo ""
+    @echo "Services:"
+    @echo "  Application:  http://localhost:8080"
+    @echo "  Grafana:      http://localhost:3000 (admin/admin)"
+    @echo "  Prometheus:   http://localhost:9091"
+    @echo "  Jaeger:       http://localhost:16686"
+    @echo "  Metrics:      http://localhost:9090/metrics"
+    @echo ""
+    @echo "Waiting for services to be ready (15s)..."
+    @sleep 15
+    @echo "✅ Stack is ready!"
+
+# Stop the observability stack
+down:
+    docker compose down
+
+# View logs from all services
+logs:
+    docker compose logs -f
+
+# View logs from the application only
+logs-app:
+    docker compose logs -f app
+
+# Restart the stack
+restart:
+    docker compose restart
+
+# Stop and remove all data
+clean:
+    docker compose down -v
+    @echo "🧹 All data cleaned"
+
+# Rebuild the application
+build:
+    docker compose build app
+
+# Generate sample HTTP traffic
+traffic:
+    @echo "Generating traffic..."
+    @for i in 1 2 3 4 5; do \
+        curl -s http://localhost:8080/users > /dev/null && echo "Request $i: ✓"; \
+        sleep 1; \
+    done
+    @echo "✅ Traffic generated"
+
+# Generate continuous traffic (Ctrl+C to stop)
+traffic-loop:
+    @echo "Generating continuous traffic (Ctrl+C to stop)..."
+    @while true; do \
+        curl -s http://localhost:8080/users > /dev/null && echo "$(date): ✓"; \
+        sleep 2; \
+    done
+
+# Show status of all services
+status:
+    docker compose ps
+
+# View raw metrics from the app
+metrics:
+    curl http://localhost:9090/metrics
+
+# Open Grafana in browser
+open-grafana:
+    @echo "Opening Grafana..."
+    @open http://localhost:3000 2>/dev/null || xdg-open http://localhost:3000 2>/dev/null || echo "Please open http://localhost:3000 manually"
+
+# Open Jaeger UI in browser
+open-jaeger:
+    @echo "Opening Jaeger..."
+    @open http://localhost:16686 2>/dev/null || xdg-open http://localhost:16686 2>/dev/null || echo "Please open http://localhost:16686 manually"
+
+# Open Prometheus in browser
+open-prometheus:
+    @echo "Opening Prometheus..."
+    @open http://localhost:9091 2>/dev/null || xdg-open http://localhost:9091 2>/dev/null || echo "Please open http://localhost:9091 manually"
+
+# Open all UIs in browser
+open-all: open-grafana open-jaeger open-prometheus
+    @sleep 1
+
+# Full demo: start stack, wait, generate traffic, open UIs
+demo: up
+    @sleep 5
+    @just traffic
+    @just open-all
+    @echo ""
+    @echo "🎉 Demo ready! Check your browser."
+    @echo "Run 'just logs' to see live logs"
+
+# Quick health check of all services
+health:
+    @echo "Checking service health..."
+    @echo -n "Application: "
+    @curl -s http://localhost:8080/users > /dev/null && echo "✓" || echo "✗"
+    @echo -n "Prometheus: "
+    @curl -s http://localhost:9091/-/healthy > /dev/null && echo "✓" || echo "✗"
+    @echo -n "Jaeger: "
+    @curl -s http://localhost:16686/ > /dev/null && echo "✓" || echo "✗"
+    @echo -n "Grafana: "
+    @curl -s http://localhost:3000/api/health > /dev/null && echo "✓" || echo "✗"
+    @echo -n "Loki: "
+    @curl -s http://localhost:3100/ready > /dev/null && echo "✓" || echo "✗"
+
+# Tail logs for a specific service
+tail service:
+    docker compose logs -f {{service}}
+
+# Execute a shell in a running service
+shell service:
+    docker compose exec {{service}} /bin/sh
+
+# Show resource usage
+stats:
+    docker stats $(docker compose ps -q)
+
+# Run docker compose with custom arguments
+compose *args:
+    docker compose {{args}}
