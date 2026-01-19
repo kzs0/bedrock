@@ -30,3 +30,11 @@ datasources:
     access: proxy
     url: http://jaeger:16686
     editable: true
+
+  # Pyroscope datasource for continuous profiling
+  - name: Pyroscope
+    type: grafana-pyroscope-datasource
+    uid: pyroscope
+    access: proxy
+    url: http://pyroscope:4040
+    editable: true

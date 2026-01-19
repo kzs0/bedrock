@@ -1,0 +1,27 @@
+---
+# Pyroscope configuration for scraping pprof endpoints from the app
+
+scrape-configs:
+  - job-name: bedrock-demo
+    enabled-profiles:
+      - cpu
+      - mem
+      - goroutines
+      - mutex
+      - block
+    static-configs:
+      - application: bedrock-demo
+        spy-name: gospy
+        targets:
+          - app:9090
+        labels:
+          env: development
+          service: bedrock-demo
+    params:
+      # Duration for CPU profiling in seconds
+      seconds: ["10"]
+    scrape-interval: 15s
+    scrape-timeout: 10s
+    scheme: http
+    # Path to pprof endpoints
+    metrics-path: /debug/pprof

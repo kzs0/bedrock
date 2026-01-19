@@ -8,7 +8,8 @@ This example demonstrates a complete observability stack using Bedrock with indu
 - **Metrics**: Prometheus (scraping from Bedrock's `/metrics` endpoint)
 - **Traces**: Jaeger (receiving OTLP traces from Bedrock)
 - **Logs**: Grafana Loki + Promtail (collecting structured JSON logs)
-- **Visualization**: Grafana (unified dashboard for metrics, logs, and traces)
+- **Profiling**: Pyroscope (continuous profiling via pprof endpoints)
+- **Visualization**: Grafana (unified dashboard for metrics, logs, traces, and profiles)
 
 ## Architecture
 
@@ -17,25 +18,27 @@ This example demonstrates a complete observability stack using Bedrock with indu
 │  Bedrock App    │
 │  :8080 (HTTP)   │
 │  :9090 (Obs)    │
-└────┬────┬───┬───┘
-     │    │   │
-     │    │   └────────────────┐
-     │    │                    │
-     │    └────────┐           │
-     │             │           │
-     ▼             ▼           ▼
-┌──────────┐  ┌─────────┐  ┌───────┐
-│Prometheus│  │ Jaeger  │  │ Loki  │
-│  :9091   │  │ :16686  │  │ :3100 │
-└────┬─────┘  └────┬────┘  └───┬───┘
-     │             │           │
-     └─────────────┴───────────┘
-                   │
-                   ▼
-              ┌─────────┐
-              │ Grafana │
-              │  :3000  │
-              └─────────┘
+└──┬────┬───┬──┬──┘
+   │    │   │  │
+   │    │   │  └──────────────────────┐
+   │    │   │                         │
+   │    │   └─────────────┐           │
+   │    │                 │           │
+   │    └────────┐        │           │
+   │             │        │           │
+   ▼             ▼        ▼           ▼
+┌──────────┐ ┌──────┐ ┌───────┐ ┌───────────┐
+│Prometheus│ │Jaeger│ │ Loki  │ │ Pyroscope │
+│  :9091   │ │:16686│ │ :3100 │ │   :4040   │
+└────┬─────┘ └──┬───┘ └───┬───┘ └────┬──────┘
+     │          │         │          │
+     └──────────┴─────────┴──────────┘
+                │
+                ▼
+           ┌─────────┐
+           │ Grafana │
+           │  :3000  │
+           └─────────┘
 ```
 
 ## Prerequisites
@@ -78,6 +81,7 @@ curl http://localhost:8080/users
 | **Grafana** | http://localhost:3000 | Unified observability dashboard (admin/admin) |
 | **Prometheus** | http://localhost:9091 | Metrics storage and queries |
 | **Jaeger UI** | http://localhost:16686 | Distributed trace visualization |
+| **Pyroscope** | http://localhost:4040 | Continuous profiling data |
 | **App Metrics** | http://localhost:9090/metrics | Raw Prometheus metrics |
 | **App Pprof** | http://localhost:9090/debug/pprof/ | Go profiling endpoints |
 
@@ -182,7 +186,39 @@ When `CANONICAL_LOG=true`, Bedrock emits structured logs on operation completion
 2. **Explore → Metrics**: Query Prometheus metrics
 3. **Explore → Logs**: Search Loki logs with LogQL
 4. **Explore → Traces**: View Jaeger traces
-5. **Dashboards → Bedrock**: Pre-configured overview dashboard
+5. **Explore → Profiles**: Analyze Pyroscope profiling data
+6. **Dashboards → Bedrock**: Pre-configured overview dashboard
+
+### Profiling in Grafana
+
+Pyroscope automatically scrapes profiles from the app's pprof endpoints every 15 seconds.
+
+**To view profiles in Grafana**:
+1. Go to **Explore** in Grafana
+2. Select **Pyroscope** datasource
+3. Choose:
+   - **Application**: `bedrock-demo`
+   - **Profile type**: CPU, memory (inuse_space, alloc_space), goroutines, mutex, block
+   - **Time range**: Last 15m, 1h, etc.
+4. Analyze flamegraphs to identify performance bottlenecks
+
+**Profile types collected**:
+- **CPU**: Where the application spends CPU time
+- **Memory (alloc_space)**: Total memory allocated over time
+- **Memory (inuse_space)**: Current heap memory in use
+- **Goroutines**: Number and state of goroutines
+- **Mutex**: Lock contention
+- **Block**: Blocking operations (I/O, channel ops, etc.)
+
+**Manual profiling (alternative)**:
+```bash
+# Capture a 30-second CPU profile
+curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30
+
+# Analyze with go tool pprof
+go tool pprof cpu.prof
+go tool pprof -http=:8081 cpu.prof  # Web UI
+```
 
 ### Sample Queries
 

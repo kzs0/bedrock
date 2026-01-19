@@ -97,6 +97,24 @@ services:
     networks:
       - observability
 
+  # Pyroscope for continuous profiling
+  pyroscope:
+    image: grafana/pyroscope:latest
+    ports:
+      - "4040:4040"
+    command:
+      - "server"
+    volumes:
+      - ./config/pyroscope.yml:/etc/pyroscope/config.yaml:ro
+      - pyroscope-data:/var/lib/pyroscope
+    networks:
+      - observability
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:4040/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
   # Grafana for visualization
   grafana:
     image: grafana/grafana:10.2.2
@@ -114,6 +132,7 @@ services:
       - prometheus
       - loki
       - jaeger
+      - pyroscope
     networks:
       - observability
     healthcheck:
@@ -131,3 +150,4 @@ volumes:
   prometheus-data:
   loki-data:
   grafana-data:
+  pyroscope-data:

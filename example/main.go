@@ -48,7 +48,21 @@ func main() {
 	go func() {
 		log.Println("Observability server listening on :9090")
 		log.Println("  - Metrics: http://localhost:9090/metrics")
+		log.Println("  - Health:  http://localhost:9090/health")
 		log.Println("  - Pprof:   http://localhost:9090/debug/pprof/")
+		log.Println("")
+		log.Println("Profiling:")
+		log.Println("  Manual profiling:")
+		log.Println("    - CPU profile (30s):  curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30")
+		log.Println("    - Heap profile:       curl -o heap.prof http://localhost:9090/debug/pprof/heap")
+		log.Println("    - Goroutine profile:  curl -o goroutine.prof http://localhost:9090/debug/pprof/goroutine")
+		log.Println("    - Analyze profile:    go tool pprof cpu.prof")
+		log.Println("")
+		log.Println("  Continuous profiling with Pyroscope + Grafana:")
+		log.Println("    1. Start: docker-compose up -d")
+		log.Println("    2. View:  http://localhost:3000 (Grafana)")
+		log.Println("    3. Pyroscope will scrape pprof endpoints every 15s")
+		log.Println("")
 		if err := obsServer.ListenAndServe(); err != http.ErrServerClosed {
 			log.Printf("Observability server error: %v", err)
 		}
