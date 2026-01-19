@@ -10,9 +10,9 @@ import (
 	"github.com/kzs0/bedrock/trace"
 )
 
-// Step is a handle to a step within an operation.
+// OpStep is a handle to a step within an operation.
 // Steps contribute their attributes to the parent operation.
-type Step struct {
+type OpStep struct {
 	span   *trace.Span
 	attrs  attr.Set
 	parent *operationState
@@ -35,7 +35,7 @@ type operationState struct {
 	failure      error
 
 	// Child tracking for enumeration
-	steps        []*Step
+	steps        []*OpStep
 	stepCounts   map[string]int // count of steps by name for enumeration
 	childOpCount map[string]int // count of child operations by name
 }
@@ -51,7 +51,7 @@ func newOperationState(b *Bedrock, span *trace.Span, name string, cfg operationC
 		metricLabels: cfg.metricLabels,
 		parent:       parent,
 		success:      true, // Default to success
-		steps:        make([]*Step, 0),
+		steps:        make([]*OpStep, 0),
 		stepCounts:   make(map[string]int),
 		childOpCount: make(map[string]int),
 	}
@@ -262,7 +262,7 @@ func (op *operationState) logCanonical() {
 //
 //	step := bedrock.Step(ctx, "helper")
 //	defer step.Done()
-func StepFromContext(ctx context.Context, name string, attrs ...attr.Attr) *Step {
+func StepFromContext(ctx context.Context, name string, attrs ...attr.Attr) *OpStep {
 	b := bedrockFromContext(ctx)
 
 	// Get parent operation
@@ -289,7 +289,7 @@ func StepFromContext(ctx context.Context, name string, attrs ...attr.Attr) *Step
 
 	_, span := b.tracer.Start(parentCtx, fullName, trace.WithAttrs(attrs...))
 
-	step := &Step{
+	step := &OpStep{
 		span:   span,
 		attrs:  attr.NewSet(attrs...),
 		parent: parent,
@@ -316,7 +316,7 @@ func StepFromContext(ctx context.Context, name string, attrs ...attr.Attr) *Step
 //	    attr.String("rows", "42"),
 //	    attr.NewEvent("query.complete"),
 //	)
-func (s *Step) Register(ctx context.Context, items ...interface{}) {
+func (s *OpStep) Register(ctx context.Context, items ...interface{}) {
 	attrs := make([]attr.Attr, 0)
 
 	for _, item := range items {
@@ -345,7 +345,7 @@ func (s *Step) Register(ctx context.Context, items ...interface{}) {
 }
 
 // Done ends the step.
-func (s *Step) Done() {
+func (s *OpStep) Done() {
 	if s.span != nil {
 		s.span.End()
 	}

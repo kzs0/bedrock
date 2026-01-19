@@ -178,7 +178,7 @@ func loop(ctx context.Context, term time.Duration) error {
 }
 
 func helper(ctx context.Context) {
-	step := bedrock.NewStep(ctx, "helper")
+	step := bedrock.Step(ctx, "helper")
 	defer step.Done()
 
 	step.Register(ctx, attr.Int("helper_count", 1))

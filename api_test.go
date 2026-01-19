@@ -353,12 +353,12 @@ func TestMetricsSameName(t *testing.T) {
 	)
 	defer close()
 
-	// Creating metrics with the same name should return the same instance
+	// Creating metrics with the same name should return the same underlying instance
 	counter1 := Counter(ctx, "requests", "Request count")
 	counter2 := Counter(ctx, "requests", "Request count")
 
-	if counter1 != counter2 {
-		t.Error("expected same counter instance for same name")
+	if counter1.counter != counter2.counter {
+		t.Error("expected same underlying counter instance for same name")
 	}
 }
 

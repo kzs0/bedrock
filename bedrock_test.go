@@ -269,7 +269,7 @@ func TestStep(t *testing.T) {
 	defer op.Done()
 
 	// Now create a step
-	step := NewStep(ctx, "helper",
+	step := Step(ctx, "helper",
 		attr.String("key", "value"),
 	)
 	defer step.Done()

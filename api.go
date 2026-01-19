@@ -224,15 +224,15 @@ func Source(ctx context.Context, name string, opts ...SourceOption) (*Src, conte
 	}, ctx
 }
 
-// NewStep creates a lightweight step within an operation for tracing without full operation metrics.
+// Step creates a lightweight step within an operation for tracing without full operation metrics.
 // Steps are part of their parent operation and contribute attributes/events to it.
 // Use this for helper functions where you want trace visibility but not separate metrics.
 //
 // Usage:
 //
-//	step := bedrock.NewStep(ctx, "helper")
+//	step := bedrock.Step(ctx, "helper")
 //	defer step.Done()
-func NewStep(ctx context.Context, name string, attrs ...attr.Attr) *Step {
+func Step(ctx context.Context, name string, attrs ...attr.Attr) *OpStep {
 	return StepFromContext(ctx, name, attrs...)
 }
 

@@ -287,7 +287,7 @@ defer op.Done()
 ### Lightweight Steps
 
 ```go
-step := bedrock.NewStep(ctx, "helper")
+step := bedrock.Step(ctx, "helper")
 defer step.Done()
 
 step.Register(ctx, attr.Int("rows_processed", 42))
