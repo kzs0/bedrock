@@ -154,7 +154,7 @@ func (v Value) AsTime() time.Time {
 	return v.any.(time.Time)
 }
 
-// AsAny returns the underlying value as an interface{}.
+// AsAny returns the underlying value as an any.
 func (v Value) AsAny() any {
 	switch v.kind {
 	case KindString:

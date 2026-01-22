@@ -7,6 +7,7 @@ import (
 
 	"github.com/kzs0/bedrock/attr"
 	"github.com/kzs0/bedrock/metric"
+	"github.com/kzs0/bedrock/server"
 	"github.com/kzs0/bedrock/trace"
 )
 
@@ -129,10 +130,10 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 	ctx = WithBedrock(ctx, b)
 
 	// Automatically create and start obs server if enabled in config
-	var obsServer *Server
+	var obsServer *server.Server
 	if cfg.config.ServerEnabled {
 		serverCfg := cfg.config.serverConfig()
-		obsServer = b.NewServer(serverCfg)
+		obsServer = server.New(b.metrics, serverCfg)
 		go func() {
 			if err := obsServer.ListenAndServe(); err != nil {
 				// Only log if it's not a graceful shutdown
@@ -218,7 +219,15 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 		parentCtx = ctx
 	}
 
-	newCtx, span := b.tracer.Start(parentCtx, cfg.name, trace.WithAttrs(cfg.attrs...))
+	// Build span options
+	spanOpts := []trace.StartSpanOption{trace.WithAttrs(cfg.attrs...)}
+
+	// Add remote parent if provided (from W3C Trace Context)
+	if cfg.remoteParent != nil && cfg.remoteParent.IsValid() {
+		spanOpts = append(spanOpts, trace.WithRemoteParent(*cfg.remoteParent))
+	}
+
+	newCtx, span := b.tracer.Start(parentCtx, cfg.name, spanOpts...)
 
 	// Create operation state
 	state := newOperationState(b, span, cfg.name, cfg, parent)
@@ -276,7 +285,7 @@ func Step(ctx context.Context, name string, attrs ...attr.Attr) *OpStep {
 //	    attr.NewEvent("cache.hit", attr.String("key", "user:123")),
 //	    attr.Error(err),  // marks as failure if err != nil
 //	)
-func (op *Op) Register(ctx context.Context, items ...interface{}) {
+func (op *Op) Register(ctx context.Context, items ...attr.Registrable) {
 	attrs := make([]attr.Attr, 0)
 
 	for _, item := range items {

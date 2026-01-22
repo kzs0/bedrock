@@ -2,6 +2,7 @@ package bedrock
 
 import (
 	"github.com/kzs0/bedrock/attr"
+	"github.com/kzs0/bedrock/trace"
 )
 
 // OperationOption configures an operation.
@@ -11,9 +12,10 @@ type OperationOption func(*operationConfig)
 type operationConfig struct {
 	name         string
 	attrs        []attr.Attr
-	metricLabels []string // defined metric label names (registered upfront)
-	success      bool     // whether the operation succeeded (for auto metrics)
-	failure      error    // error if operation failed
+	metricLabels []string           // defined metric label names (registered upfront)
+	success      bool               // whether the operation succeeded (for auto metrics)
+	failure      error              // error if operation failed
+	remoteParent *trace.SpanContext // remote parent from W3C Trace Context
 }
 
 // Attrs adds attributes to an operation.
@@ -45,6 +47,13 @@ func Failure(err error) OperationOption {
 	return func(cfg *operationConfig) {
 		cfg.success = false
 		cfg.failure = err
+	}
+}
+
+// WithRemoteParent sets the remote parent from W3C Trace Context headers.
+func WithRemoteParent(parent trace.SpanContext) OperationOption {
+	return func(cfg *operationConfig) {
+		cfg.remoteParent = &parent
 	}
 }
 
