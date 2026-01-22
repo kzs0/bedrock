@@ -286,7 +286,7 @@ func IsValidTracestateValue(value string) bool {
 // isHex checks if a string contains only hexadecimal characters (case-insensitive).
 func isHex(s string) bool {
 	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return false
 		}
 	}
@@ -296,7 +296,7 @@ func isHex(s string) bool {
 // isLowercaseHex checks if a string contains only lowercase hexadecimal characters.
 func isLowercaseHex(s string) bool {
 	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}
@@ -310,8 +310,8 @@ func isValidSimpleKey(key string) bool {
 	}
 
 	for _, c := range key {
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-			c == '_' || c == '-' || c == '*' || c == '/') {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') &&
+			c != '_' && c != '-' && c != '*' && c != '/' {
 			return false
 		}
 	}

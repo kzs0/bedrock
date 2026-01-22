@@ -64,7 +64,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Inject W3C Trace Context headers
 	prop := &httpProp.Propagator{}
-	prop.Inject(spanCtx, req.Header)
+	_ = prop.Inject(spanCtx, req.Header)
 
 	// Update request context to include span
 	req = req.WithContext(spanCtx)
