@@ -43,7 +43,7 @@ func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 	b := &Bedrock{
 		config:     cfg,
 		staticAttr: attr.NewSet(staticAttrs...),
-		metrics:    metric.NewRegistry(),
+		metrics:    metric.NewRegistry(cfg.MetricPrefix),
 	}
 
 	// Setup logging

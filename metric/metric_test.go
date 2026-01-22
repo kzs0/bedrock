@@ -7,7 +7,7 @@ import (
 )
 
 func TestCounter(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry("")
 	c := r.Counter("requests_total", "Total requests")
 
 	c.Inc()
@@ -35,7 +35,7 @@ func TestCounter(t *testing.T) {
 }
 
 func TestCounterWithLabels(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry("")
 	c := r.Counter("http_requests_total", "HTTP requests", "method", "status")
 
 	c.With(attr.String("method", "GET"), attr.String("status", "200")).Inc()
@@ -54,7 +54,7 @@ func TestCounterWithLabels(t *testing.T) {
 }
 
 func TestGauge(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry("")
 	g := r.Gauge("temperature", "Current temperature")
 
 	g.Set(20.5)
@@ -91,7 +91,7 @@ func TestGauge(t *testing.T) {
 }
 
 func TestHistogram(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry("")
 	h := r.Histogram("request_duration", "Request duration", []float64{0.1, 0.5, 1.0})
 
 	h.Observe(0.05) // bucket 0.1
@@ -136,7 +136,7 @@ func TestHistogram(t *testing.T) {
 }
 
 func TestRegistryGetOrCreate(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry("")
 
 	c1 := r.Counter("test_counter", "Test")
 	c2 := r.Counter("test_counter", "Test")
@@ -149,5 +149,67 @@ func TestRegistryGetOrCreate(t *testing.T) {
 	families := r.Gather()
 	if families[0].Metrics[0].Value != 1 {
 		t.Error("counter should be shared")
+	}
+}
+
+func TestRegistryPrefix(t *testing.T) {
+	r := NewRegistry("myapp")
+
+	counter := r.Counter("requests_total", "Total requests")
+	counter.Inc()
+
+	families := r.Gather()
+	if len(families) != 1 {
+		t.Fatalf("expected 1 family, got %d", len(families))
+	}
+	if families[0].Name != "myapp_requests_total" {
+		t.Errorf("expected name 'myapp_requests_total', got '%s'", families[0].Name)
+	}
+
+	// Test gauge
+	gauge := r.Gauge("active_connections", "Active connections")
+	gauge.Set(10)
+
+	families = r.Gather()
+	found := false
+	for _, fam := range families {
+		if fam.Name == "myapp_active_connections" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected gauge with prefixed name 'myapp_active_connections'")
+	}
+
+	// Test histogram
+	histogram := r.Histogram("request_duration", "Request duration", []float64{1, 5, 10})
+	histogram.Observe(2.5)
+
+	families = r.Gather()
+	found = false
+	for _, fam := range families {
+		if fam.Name == "myapp_request_duration" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected histogram with prefixed name 'myapp_request_duration'")
+	}
+}
+
+func TestRegistryNoPrefix(t *testing.T) {
+	r := NewRegistry("")
+
+	counter := r.Counter("requests_total", "Total requests")
+	counter.Inc()
+
+	families := r.Gather()
+	if len(families) != 1 {
+		t.Fatalf("expected 1 family, got %d", len(families))
+	}
+	if families[0].Name != "requests_total" {
+		t.Errorf("expected name 'requests_total' (no prefix), got '%s'", families[0].Name)
 	}
 }

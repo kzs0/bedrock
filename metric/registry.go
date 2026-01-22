@@ -10,14 +10,18 @@ import (
 // Registry is a thread-safe registry for metrics.
 type Registry struct {
 	mu         sync.RWMutex
+	prefix     string
 	counters   map[string]*Counter
 	gauges     map[string]*Gauge
 	histograms map[string]*Histogram
 }
 
-// NewRegistry creates a new metric registry.
-func NewRegistry() *Registry {
+// NewRegistry creates a new metric registry with an optional prefix.
+// The prefix is prepended to all metric names (e.g., prefix="myapp" creates "myapp_metric_name").
+// If prefix is empty, no prefix is added.
+func NewRegistry(prefix string) *Registry {
 	return &Registry{
+		prefix:     prefix,
 		counters:   make(map[string]*Counter),
 		gauges:     make(map[string]*Gauge),
 		histograms: make(map[string]*Histogram),
@@ -28,6 +32,11 @@ func NewRegistry() *Registry {
 func (r *Registry) Counter(name, help string, labelNames ...string) *Counter {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Prepend prefix if configured
+	if r.prefix != "" {
+		name = r.prefix + "_" + name
+	}
 
 	// Sanitize metric name for Prometheus compatibility
 	name = sanitizeName(name)
@@ -57,6 +66,11 @@ func (r *Registry) Gauge(name, help string, labelNames ...string) *Gauge {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Prepend prefix if configured
+	if r.prefix != "" {
+		name = r.prefix + "_" + name
+	}
+
 	// Sanitize metric name for Prometheus compatibility
 	name = sanitizeName(name)
 
@@ -84,6 +98,11 @@ func (r *Registry) Gauge(name, help string, labelNames ...string) *Gauge {
 func (r *Registry) Histogram(name, help string, buckets []float64, labelNames ...string) *Histogram {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Prepend prefix if configured
+	if r.prefix != "" {
+		name = r.prefix + "_" + name
+	}
 
 	// Sanitize metric name for Prometheus compatibility
 	name = sanitizeName(name)

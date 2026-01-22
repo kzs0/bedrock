@@ -402,3 +402,70 @@ func TestStaticAttributesInLogs(t *testing.T) {
 		t.Error("expected log to contain 'user_id' dynamic attribute")
 	}
 }
+
+func TestWithLogLevel(t *testing.T) {
+	var buf bytes.Buffer
+	ctx, close := Init(context.Background(),
+		WithConfig(Config{
+			Service:   "test-service",
+			LogOutput: &buf,
+		}),
+		WithLogLevel("debug"),
+	)
+	defer close()
+
+	b := FromContext(ctx)
+	if b.config.LogLevel != "debug" {
+		t.Errorf("expected log level 'debug', got '%s'", b.config.LogLevel)
+	}
+
+	// Verify debug logs are actually output
+	Debug(ctx, "debug message")
+	if !bytes.Contains(buf.Bytes(), []byte("debug message")) {
+		t.Error("expected debug log to be output with debug level")
+	}
+}
+
+func TestWithLogLevelOverride(t *testing.T) {
+	var buf bytes.Buffer
+	ctx, close := Init(context.Background(),
+		WithConfig(Config{
+			Service:   "test-service",
+			LogLevel:  "info",
+			LogOutput: &buf,
+		}),
+		WithLogLevel("error"), // Should override the config
+	)
+	defer close()
+
+	b := FromContext(ctx)
+	if b.config.LogLevel != "error" {
+		t.Errorf("expected log level 'error' (overridden), got '%s'", b.config.LogLevel)
+	}
+
+	// Debug and Info should not be output
+	Debug(ctx, "debug message")
+	Info(ctx, "info message")
+	if bytes.Contains(buf.Bytes(), []byte("debug message")) {
+		t.Error("debug message should not be output at error level")
+	}
+	if bytes.Contains(buf.Bytes(), []byte("info message")) {
+		t.Error("info message should not be output at error level")
+	}
+
+	// Error should be output
+	Error(ctx, "error message")
+	if !bytes.Contains(buf.Bytes(), []byte("error message")) {
+		t.Error("expected error log to be output at error level")
+	}
+}
+
+func TestWithLogLevelStandalone(t *testing.T) {
+	ctx, close := Init(context.Background(), WithLogLevel("warn"))
+	defer close()
+
+	b := FromContext(ctx)
+	if b.config.LogLevel != "warn" {
+		t.Errorf("expected log level 'warn', got '%s'", b.config.LogLevel)
+	}
+}
