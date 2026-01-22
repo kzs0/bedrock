@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/kzs0/bedrock/attr"
+	httpProp "github.com/kzs0/bedrock/trace/http"
 )
 
 // HTTPMiddleware wraps an HTTP handler with bedrock operations.
@@ -53,10 +54,21 @@ func HTTPMiddleware(ctx context.Context, handler http.Handler, opts ...Middlewar
 			reqCtx = WithBedrock(reqCtx, baseBedrock)
 		}
 
-		op, opCtx := Operation(reqCtx, cfg.operationName,
-			Attrs(attrs...),
-			MetricLabels(labels...),
-		)
+		// Extract W3C Trace Context from headers if trace propagation is enabled
+		var opOpts []OperationOption
+		opOpts = append(opOpts, Attrs(attrs...))
+		opOpts = append(opOpts, MetricLabels(labels...))
+
+		if cfg.tracePropagation {
+			prop := &httpProp.Propagator{}
+			remoteCtx, err := prop.Extract(r.Header)
+			if err == nil && remoteCtx.IsValid() {
+				// Start operation with remote parent context
+				opOpts = append(opOpts, WithRemoteParent(remoteCtx))
+			}
+		}
+
+		op, opCtx := Operation(reqCtx, cfg.operationName, opOpts...)
 		defer op.Done()
 
 		// Wrap response writer to capture status code
@@ -95,6 +107,7 @@ type middlewareConfig struct {
 	additionalLabels   []string
 	additionalAttrs    func(*http.Request) []attr.Attr
 	successStatusCodes map[int]bool
+	tracePropagation   bool
 }
 
 // WithOperationName sets a custom operation name (default: "http.request").
@@ -130,12 +143,21 @@ func WithSuccessCodes(codes ...int) MiddlewareOption {
 	}
 }
 
+// WithTracePropagation enables or disables W3C Trace Context propagation.
+// Default: enabled (true).
+func WithTracePropagation(enable bool) MiddlewareOption {
+	return func(cfg *middlewareConfig) {
+		cfg.tracePropagation = enable
+	}
+}
+
 // applyMiddlewareOptions applies middleware options.
 func applyMiddlewareOptions(opts []MiddlewareOption) middlewareConfig {
 	cfg := middlewareConfig{
 		operationName:      "http.request",
 		additionalLabels:   make([]string, 0),
 		successStatusCodes: nil,
+		tracePropagation:   true, // Default: enabled
 	}
 	for _, opt := range opts {
 		opt(&cfg)

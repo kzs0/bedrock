@@ -32,17 +32,18 @@ const (
 type Span struct {
 	mu sync.Mutex
 
-	name      string
-	traceID   internal.TraceID
-	spanID    internal.SpanID
-	parentID  internal.SpanID
-	kind      SpanKind
-	startTime time.Time
-	endTime   time.Time
-	attrs     attr.Set
-	events    []Event
-	status    SpanStatus
-	statusMsg string
+	name       string
+	traceID    internal.TraceID
+	spanID     internal.SpanID
+	parentID   internal.SpanID
+	kind       SpanKind
+	startTime  time.Time
+	endTime    time.Time
+	attrs      attr.Set
+	events     []Event
+	status     SpanStatus
+	statusMsg  string
+	tracestate string // W3C tracestate for propagation
 
 	tracer *Tracer
 	ended  bool

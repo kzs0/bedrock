@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kzs0/bedrock/env"
+	"github.com/kzs0/bedrock/server"
 	"github.com/kzs0/bedrock/trace"
 )
 
@@ -25,8 +26,9 @@ type Config struct {
 	TraceSampler trace.Sampler `env:"-"`
 
 	// Logging configuration
-	// LogLevel is the minimum log level (debug, info, warn, error).
-	LogLevel string `env:"BEDROCK_LOG_LEVEL" envDefault:"info"`
+	// LogLevel is the minimum log level (DEBUG, INFO, WARN, ERROR).
+	LogLevel string `env:"BEDROCK_LOG_LEVEL" envDefault:"INFO"`
+
 	// LogFormat is "json" or "text".
 	LogFormat string `env:"BEDROCK_LOG_FORMAT" envDefault:"json"`
 	// LogOutput is the log output writer. Defaults to os.Stderr.
@@ -124,9 +126,9 @@ func (c Config) logLevel() slog.Level {
 	return parseLogLevel(c.LogLevel)
 }
 
-// serverConfig returns a ServerConfig from the Config fields.
-func (c Config) serverConfig() ServerConfig {
-	return ServerConfig{
+// serverConfig returns a server.Config from the Config fields.
+func (c Config) serverConfig() server.Config {
+	return server.Config{
 		Addr:              c.ServerAddr,
 		EnableMetrics:     c.ServerMetrics,
 		EnablePprof:       c.ServerPprof,

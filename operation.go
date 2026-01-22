@@ -192,28 +192,28 @@ func (op *operationState) logCanonical() {
 	duration := time.Since(op.startTime)
 
 	// Collect attributes
-	attrs := make(map[string]interface{})
+	attrs := make(map[string]any)
 	op.attrs.Range(func(a attr.Attr) bool {
 		attrs[a.Key] = a.Value.AsAny()
 		return true
 	})
 
 	// Collect step information
-	steps := make([]map[string]interface{}, len(op.steps))
+	steps := make([]map[string]any, len(op.steps))
 	for i, step := range op.steps {
-		stepAttrs := make(map[string]interface{})
+		stepAttrs := make(map[string]any)
 		step.attrs.Range(func(a attr.Attr) bool {
 			stepAttrs[a.Key] = a.Value.AsAny()
 			return true
 		})
-		steps[i] = map[string]interface{}{
+		steps[i] = map[string]any{
 			"name":       step.span.Name(),
 			"attributes": stepAttrs,
 		}
 	}
 
 	// Build log fields
-	logFields := []interface{}{
+	logFields := []any{
 		"operation", op.name,
 		"duration_ms", duration.Milliseconds(),
 		"success", op.success,
@@ -296,7 +296,7 @@ func StepFromContext(ctx context.Context, name string, attrs ...attr.Attr) *OpSt
 //	    attr.String("rows", "42"),
 //	    attr.NewEvent("query.complete"),
 //	)
-func (s *OpStep) Register(ctx context.Context, items ...interface{}) {
+func (s *OpStep) Register(ctx context.Context, items ...attr.Registrable) {
 	attrs := make([]attr.Attr, 0)
 
 	for _, item := range items {

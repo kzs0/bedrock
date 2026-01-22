@@ -10,6 +10,9 @@ type Attr struct {
 	Value Value
 }
 
+// registrable implements the Registrable interface.
+func (Attr) registrable() {}
+
 // String creates a string attribute.
 func String(key, value string) Attr {
 	return Attr{Key: key, Value: StringValue(value)}
@@ -61,6 +64,13 @@ func Error(err error) Attr {
 		return Attr{Key: "error", Value: StringValue("")}
 	}
 	return Attr{Key: "error", Value: StringValue(err.Error())}
+}
+
+// Registrable represents an item that can be registered on operations and steps.
+// This includes attributes (which become span attributes and operation state)
+// and events (which become span events).
+type Registrable interface {
+	registrable() // private marker method
 }
 
 // Aggregation represents an aggregation operation for source metrics.
@@ -119,6 +129,9 @@ type Event struct {
 	Name  string
 	Attrs []Attr
 }
+
+// registrable implements the Registrable interface.
+func (Event) registrable() {}
 
 // NewEvent creates an event with attributes.
 // Events are recorded in traces but don't become operation attributes.

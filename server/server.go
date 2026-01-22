@@ -1,4 +1,8 @@
-package bedrock
+// Package server provides an HTTP server for observability endpoints.
+// This includes metrics, health checks, and pprof profiling endpoints.
+// Most users won't need to use this package directly as the observability server
+// is automatically started by bedrock.Init() when Config.ServerEnabled is true.
+package server
 
 import (
 	"context"
@@ -6,20 +10,21 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/kzs0/bedrock/metric"
 	"github.com/kzs0/bedrock/metric/prometheus"
 	"github.com/kzs0/bedrock/profile"
 )
 
 // Server provides HTTP endpoints for metrics and profiling.
 type Server struct {
-	bedrock         *Bedrock
+	metrics         *metric.Registry
 	server          *http.Server
 	mux             *http.ServeMux
 	shutdownTimeout time.Duration
 }
 
-// ServerConfig configures the observability HTTP server.
-type ServerConfig struct {
+// Config configures the observability HTTP server.
+type Config struct {
 	// Addr is the address to listen on (e.g., ":9090").
 	Addr string
 	// EnableMetrics enables the /metrics endpoint.
@@ -60,10 +65,10 @@ type ServerConfig struct {
 	ShutdownTimeout time.Duration
 }
 
-// DefaultServerConfig returns a default server configuration with
+// DefaultConfig returns a default server configuration with
 // production-grade security settings to protect against DoS attacks.
-func DefaultServerConfig() ServerConfig {
-	return ServerConfig{
+func DefaultConfig() Config {
+	return Config{
 		Addr:          ":9090",
 		EnableMetrics: true,
 		EnablePprof:   true,
@@ -78,12 +83,21 @@ func DefaultServerConfig() ServerConfig {
 	}
 }
 
-// NewServer creates a new observability HTTP server.
-func (b *Bedrock) NewServer(cfg ServerConfig) *Server {
+// New creates a new observability HTTP server.
+//
+// Usage:
+//
+//	import "github.com/kzs0/bedrock/server"
+//
+//	cfg := server.DefaultConfig()
+//	cfg.Addr = ":8080"
+//	obsServer := server.New(b.Metrics(), cfg)
+//	go obsServer.ListenAndServe()
+func New(metrics *metric.Registry, cfg Config) *Server {
 	mux := http.NewServeMux()
 
 	if cfg.EnableMetrics {
-		mux.Handle("/metrics", prometheus.Handler(b.metrics))
+		mux.Handle("/metrics", prometheus.Handler(metrics))
 	}
 
 	if cfg.EnablePprof {
@@ -123,7 +137,7 @@ func (b *Bedrock) NewServer(cfg ServerConfig) *Server {
 	}
 
 	return &Server{
-		bedrock:         b,
+		metrics:         metrics,
 		mux:             mux,
 		shutdownTimeout: cfg.ShutdownTimeout,
 		server: &http.Server{

@@ -9,11 +9,14 @@ An opinionated observability library for Go that provides tracing, metrics, prof
 - **Controlled cardinality**: Define metric labels upfront with `_` defaults for missing values
 - **Success by default**: Operations succeed unless errors are registered
 - **Clean API**: `Init()`, `Operation()`, `Source()`, `Step()` with `Done()` methods
-- **HTTP middleware**: Automatic operation setup for HTTP handlers with DoS protection
+- **W3C Trace Context**: Standards-compliant distributed tracing with automatic propagation
+- **HTTP middleware**: Automatic operation setup for HTTP handlers with trace extraction
+- **HTTP client**: Instrumented clients with automatic trace injection and span creation
+- **Observability server**: Built-in endpoints for metrics, profiling, and health checks
 - **Environment configuration**: Parse from env vars or provide explicit config
 - **Canonical logging**: Complete operation lifecycle logging for analysis
 - **Convenient APIs**: Direct logging and metrics functions without manual setup
-- **Production-ready**: Security timeouts, graceful shutdown, trace sampling
+- **Production-ready**: Security timeouts, graceful shutdown, DoS protection, trace sampling
 
 ## Table of Contents
 
@@ -24,12 +27,14 @@ An opinionated observability library for Go that provides tracing, metrics, prof
   - [Sources](#3-sources)
   - [Steps](#4-steps)
   - [Success by Default](#5-success-by-default)
+  - [W3C Trace Context Propagation](#6-w3c-trace-context-propagation)
 - [API Reference](#api-reference)
   - [Initialization](#initialization)
   - [Operations](#operations)
   - [Sources](#sources)
   - [Steps](#steps)
   - [HTTP Middleware](#http-middleware)
+  - [HTTP Client Instrumentation](#http-client-instrumentation)
   - [Convenient Logging](#convenient-logging)
   - [Convenient Metrics](#convenient-metrics)
 - [Configuration](#configuration)
@@ -40,12 +45,12 @@ An opinionated observability library for Go that provides tracing, metrics, prof
   - [HTTP Service](#http-service)
   - [Background Worker](#background-worker)
   - [Nested Operations](#nested-operations)
+  - [HTTP Client with Distributed Tracing](#http-client-with-distributed-tracing)
   - [Custom Metrics](#custom-metrics)
   - [Canonical Logging](#canonical-logging-1)
 - [Metrics](#metrics)
 - [Full-Stack Observability](#full-stack-observability)
 - [Design Principles](#design-principles)
-- [Migration from v1](#migration-from-v1)
 - [License](#license)
 
 ## Quick Start
@@ -222,6 +227,127 @@ This approach:
 - Makes error tracking explicit
 - Aligns with Go's error handling patterns
 
+### 6. W3C Trace Context Propagation
+
+Bedrock uses the [W3C Trace Context](https://www.w3.org/TR/trace-context/) standard for distributed tracing. Trace context automatically flows across service boundaries through HTTP headers.
+
+**Architecture**: Bedrock implements a modular propagation system with these packages:
+
+| Package | Purpose |
+|---------|---------|
+| `trace/propagator.go` | Generic `Propagator` interface for any transport |
+| `trace/w3c` | W3C format parsing/formatting utilities (protocol-agnostic) |
+| `trace/http` | HTTP propagator implementation |
+| `example/grpc` | gRPC propagator reference (copy into your project) |
+
+**Traceparent Header Format**: `00-{trace-id}-{parent-id}-{flags}`
+
+```
+00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01
+│  │                                │                │
+│  └─ trace-id (32 hex chars)      │                └─ flags (01 = sampled)
+│                                   └─ parent-id (16 hex chars)
+└─ version (00)
+```
+
+**Tracestate Header**: Optional vendor-specific tracing state
+```
+key1=value1,key2=value2
+```
+
+**Automatic Propagation**:
+
+1. **HTTP Middleware** - Extracts trace context from inbound requests:
+```go
+handler := bedrock.HTTPMiddleware(ctx, mux,
+    bedrock.WithTracePropagation(true), // Default: true
+)
+// Middleware extracts traceparent/tracestate and creates remote parent span
+```
+
+2. **HTTP Client** - Injects trace context into outbound requests:
+```go
+client := bedrock.NewClient(nil)
+resp, err := client.Get(url)
+// Client automatically injects traceparent/tracestate headers
+```
+
+**Custom Propagators**:
+
+Implement the `trace.Propagator` interface for other transports (Kafka, AMQP, gRPC, etc.):
+
+```go
+type Propagator interface {
+    Extract(carrier any) (SpanContext, error)
+    Inject(ctx context.Context, carrier any) error
+}
+```
+
+Example Kafka propagator:
+
+```go
+type KafkaPropagator struct{}
+
+func (p *KafkaPropagator) Extract(carrier any) (trace.SpanContext, error) {
+    headers := carrier.([]kafka.Header)
+    for _, h := range headers {
+        if h.Key == "traceparent" {
+            traceID, spanID, flags, err := w3c.ParseTraceparent(string(h.Value))
+            if err != nil {
+                return trace.SpanContext{}, err
+            }
+            return trace.NewRemoteSpanContext(traceID, spanID, "", flags&w3c.SampledFlag != 0), nil
+        }
+    }
+    return trace.SpanContext{}, errors.New("no traceparent header")
+}
+
+func (p *KafkaPropagator) Inject(ctx context.Context, carrier any) error {
+    headers := carrier.(*[]kafka.Header)
+    span := trace.SpanFromContext(ctx)
+    if span == nil {
+        return nil
+    }
+    
+    traceparent := w3c.FormatTraceparent(span.TraceID(), span.SpanID(), true)
+    *headers = append(*headers, kafka.Header{
+        Key:   "traceparent",
+        Value: []byte(traceparent),
+    })
+    return nil
+}
+```
+
+**W3C Utilities** (`trace/w3c` package):
+
+```go
+// Parse traceparent header
+traceID, spanID, flags, err := w3c.ParseTraceparent(value)
+
+// Format traceparent header
+traceparent := w3c.FormatTraceparent(traceID, spanID, sampled)
+
+// Parse tracestate header
+entries, err := w3c.ParseTracestate(value)
+
+// Format tracestate header
+tracestate := w3c.FormatTracestate(entries)
+
+// Validation
+isValid := w3c.IsValidTracestateKey(key)
+isValid = w3c.IsValidTracestateValue(value)
+```
+
+**gRPC Example**:
+
+See `example/grpc/` for a complete gRPC propagator implementation with client/server interceptors. This is kept separate to avoid adding gRPC as a dependency.
+
+**Validation Rules**:
+- Invalid `traceparent` → starts a new trace (ignores `tracestate`)
+- Header names are case-insensitive per HTTP RFC
+- Multiple `tracestate` headers are combined with commas
+- Trace/Span IDs must be non-zero lowercase hex characters
+
 ## API Reference
 
 ### Initialization
@@ -348,6 +474,77 @@ handler := bedrock.HTTPMiddleware(ctx, mux,
 
 **Default Metric Labels**: `http_method`, `http_route`, `http_status_code`
 
+### HTTP Client Instrumentation
+
+Bedrock provides instrumented HTTP clients that automatically create spans and propagate W3C Trace Context headers.
+
+#### `NewClient(base *http.Client) *http.Client`
+
+Create an instrumented HTTP client that wraps an existing client:
+
+```go
+// Create from scratch
+client := bedrock.NewClient(nil)
+
+// Wrap existing client
+baseClient := &http.Client{Timeout: 30 * time.Second}
+client := bedrock.NewClient(baseClient)
+
+// Use like a normal http.Client
+resp, err := client.Get(ctx, url)
+```
+
+**Automatic Behavior**:
+- Creates a client span for each request with name `HTTP {METHOD}`
+- Injects W3C Trace Context headers (`traceparent`, `tracestate`)
+- Records request attributes: `http.method`, `http.url`, `http.host`, `http.scheme`, `http.target`
+- Records response `http.status_code`
+- Marks as error for 4xx/5xx responses
+- Preserves all client settings (timeout, redirect policy, cookie jar)
+
+#### Convenience Functions
+
+For one-off requests without creating a client:
+
+```go
+// GET request
+resp, err := bedrock.Get(ctx, "https://api.example.com/users")
+
+// POST request
+resp, err := bedrock.Post(ctx, 
+    "https://api.example.com/users",
+    "application/json", 
+    bytes.NewReader(jsonBody))
+
+// Full control with custom request
+req, _ := http.NewRequestWithContext(ctx, "PUT", url, body)
+req.Header.Set("Authorization", "Bearer "+token)
+resp, err := bedrock.Do(ctx, req)
+```
+
+**Note**: For better performance with multiple requests, use `NewClient()` to create a reusable client.
+
+**Trace Propagation**:
+
+HTTP clients automatically propagate trace context across service boundaries:
+
+```go
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+    op, ctx := bedrock.Operation(r.Context(), "handle_request")
+    defer op.Done()
+    
+    // This request becomes a child span and shares the same trace_id
+    resp, err := bedrock.Get(ctx, "https://downstream-service/api")
+    if err != nil {
+        op.Register(ctx, attr.Error(err))
+        http.Error(w, err.Error(), 500)
+        return
+    }
+    
+    // Downstream service receives traceparent header linking to this trace
+}
+```
+
 ### Convenient Logging
 
 Direct logging functions that automatically include static attributes and trace context:
@@ -473,23 +670,39 @@ defer close()
 
 ### Security Defaults
 
-**Server Configuration** (for metrics/pprof endpoints):
+Bedrock provides production-ready security defaults to protect against DoS attacks and resource exhaustion.
+
+**Observability Server** (metrics/pprof endpoints):
 
 ```go
 b := bedrock.FromContext(ctx)
 server := b.NewServer(bedrock.DefaultServerConfig())
-// Uses production-ready defaults:
-// - ReadTimeout: 10s (total request read)
-// - ReadHeaderTimeout: 5s (Slowloris protection)
-// - WriteTimeout: 30s (response write)
-// - IdleTimeout: 120s (keep-alive timeout)
-// - MaxHeaderBytes: 1MB
-// - ShutdownTimeout: 30s
-
 go server.ListenAndServe()
 ```
 
+**Default Security Settings**:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `ReadTimeout` | 10s | Maximum time to read entire request (including body) |
+| `ReadHeaderTimeout` | 5s | **Slowloris attack protection** - limits header reading time |
+| `WriteTimeout` | 30s | Maximum time to write response |
+| `IdleTimeout` | 120s | Keep-alive connection timeout |
+| `MaxHeaderBytes` | 1 MB | Prevents header bomb attacks |
+| `ShutdownTimeout` | 30s | Graceful shutdown wait time |
+
+**Why These Defaults Matter**:
+
+- **ReadHeaderTimeout (5s)**: Prevents Slowloris DoS attacks where attackers send headers very slowly to exhaust server connections
+- **ReadTimeout (10s)**: Limits total request read time to prevent slow-read attacks
+- **WriteTimeout (30s)**: Prevents slow-write attacks and stalled connections
+- **IdleTimeout (120s)**: Closes idle keep-alive connections to free resources
+- **MaxHeaderBytes (1MB)**: Prevents attackers from sending enormous headers
+- **ShutdownTimeout (30s)**: Allows in-flight requests to complete during graceful shutdown
+
 **Custom Configuration**:
+
+Override defaults for specific requirements:
 
 ```go
 server := b.NewServer(bedrock.ServerConfig{
@@ -498,6 +711,7 @@ server := b.NewServer(bedrock.ServerConfig{
     EnablePprof:       true,
     EnableHealth:      true,
     ReadTimeout:       5 * time.Second,
+    ReadHeaderTimeout: 2 * time.Second,
     WriteTimeout:      10 * time.Second,
     IdleTimeout:       60 * time.Second,
     MaxHeaderBytes:    512 * 1024, // 512KB
@@ -505,18 +719,30 @@ server := b.NewServer(bedrock.ServerConfig{
 })
 ```
 
-**HTTP Application Servers**: Configure timeouts manually to prevent DoS attacks:
+**Application HTTP Servers**:
+
+Apply the same security defaults to your application servers:
 
 ```go
-server := &http.Server{
+appServer := &http.Server{
     Addr:              ":8080",
-    Handler:           handler,
+    Handler:           bedrock.HTTPMiddleware(ctx, mux),
     ReadTimeout:       10 * time.Second,
     ReadHeaderTimeout: 5 * time.Second,  // Slowloris protection
     WriteTimeout:      30 * time.Second,
     IdleTimeout:       120 * time.Second,
     MaxHeaderBytes:    1 << 20, // 1 MB
 }
+
+// Graceful shutdown
+go func() {
+    <-ctx.Done()
+    shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    appServer.Shutdown(shutdownCtx)
+}()
+
+appServer.ListenAndServe()
 ```
 
 ## Examples
@@ -616,6 +842,132 @@ func getUser(ctx context.Context, id string) (*User, error) {
     return user, nil
 }
 ```
+
+### HTTP Client with Distributed Tracing
+
+Example of making HTTP requests with automatic trace propagation:
+
+```go
+func main() {
+    ctx, close := bedrock.Init(context.Background())
+    defer close()
+    
+    // Create reusable instrumented client
+    client := bedrock.NewClient(&http.Client{
+        Timeout: 30 * time.Second,
+    })
+    
+    mux := http.NewServeMux()
+    mux.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
+        handleAPI(w, r, client)
+    })
+    
+    http.ListenAndServe(":8080", bedrock.HTTPMiddleware(ctx, mux))
+}
+
+func handleAPI(w http.ResponseWriter, r *http.Request, client *http.Client) {
+    op, ctx := bedrock.Operation(r.Context(), "api.aggregate_data")
+    defer op.Done()
+    
+    // Make parallel requests to downstream services
+    // All share the same trace_id and become child spans
+    var wg sync.WaitGroup
+    results := make(chan Response, 3)
+    
+    services := []string{
+        "http://users-service/api/users",
+        "http://orders-service/api/orders",
+        "http://inventory-service/api/inventory",
+    }
+    
+    for _, url := range services {
+        wg.Add(1)
+        go func(serviceURL string) {
+            defer wg.Done()
+            
+            // Each request creates a child span with automatic trace propagation
+            resp, err := client.Get(serviceURL)
+            if err != nil {
+                bedrock.Error(ctx, "service request failed", 
+                    attr.String("url", serviceURL),
+                    attr.Error(err))
+                return
+            }
+            defer resp.Body.Close()
+            
+            // Process response
+            var data Response
+            json.NewDecoder(resp.Body).Decode(&data)
+            results <- data
+        }(url)
+    }
+    
+    wg.Wait()
+    close(results)
+    
+    // Aggregate results
+    aggregated := aggregateResults(results)
+    
+    op.Register(ctx, attr.Int("total_results", len(aggregated)))
+    json.NewEncoder(w).Encode(aggregated)
+}
+
+// Using convenience functions for one-off requests
+func fetchUserData(ctx context.Context, userID string) (*User, error) {
+    op, ctx := bedrock.Operation(ctx, "fetch_user")
+    defer op.Done()
+    
+    // Simple GET request
+    resp, err := bedrock.Get(ctx, "https://api.example.com/users/"+userID)
+    if err != nil {
+        op.Register(ctx, attr.Error(err))
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    var user User
+    if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+        op.Register(ctx, attr.Error(err))
+        return nil, err
+    }
+    
+    return &user, nil
+}
+
+func createOrder(ctx context.Context, order *Order) error {
+    op, ctx := bedrock.Operation(ctx, "create_order")
+    defer op.Done()
+    
+    body, _ := json.Marshal(order)
+    
+    // Simple POST request
+    resp, err := bedrock.Post(ctx, 
+        "https://api.example.com/orders",
+        "application/json",
+        bytes.NewReader(body))
+    if err != nil {
+        op.Register(ctx, attr.Error(err))
+        return err
+    }
+    defer resp.Body.Close()
+    
+    if resp.StatusCode >= 400 {
+        err := fmt.Errorf("create order failed: %s", resp.Status)
+        op.Register(ctx, attr.Error(err))
+        return err
+    }
+    
+    return nil
+}
+```
+
+**Trace Visualization**:
+
+When viewing traces in Jaeger, you'll see:
+- Parent span: `api.aggregate_data`
+- Child spans: `HTTP GET` (one for each downstream service)
+- All spans share the same `trace_id`
+- Request timings and errors are visible
 
 ### Custom Metrics
 
@@ -723,7 +1075,9 @@ process_user_duration_ms_count{user_id="123",status="active",env="production"} 1
 
 **Note**: Static attributes (e.g., `env="production"`) are automatically added to all metrics.
 
-**Access Metrics**:
+**Observability Server**:
+
+The observability server provides metrics, profiling, and health check endpoints:
 
 ```go
 b := bedrock.FromContext(ctx)
@@ -734,9 +1088,41 @@ server := b.NewServer(bedrock.ServerConfig{
     EnableHealth:  true,
 })
 go server.ListenAndServe()
-// Metrics:  http://localhost:9090/metrics
-// Health:   http://localhost:9090/health
-// Pprof:    http://localhost:9090/debug/pprof/
+```
+
+**Available Endpoints**:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/metrics` | Prometheus exposition format metrics |
+| `/health` | Health check (returns "ok") |
+| `/ready` | Readiness check (returns "ok") |
+| `/debug/pprof/` | pprof index with all available profiles |
+| `/debug/pprof/profile?seconds=N` | CPU profile (30s default) |
+| `/debug/pprof/heap` | Heap memory profile |
+| `/debug/pprof/goroutine` | Goroutine stack traces |
+| `/debug/pprof/allocs` | Memory allocation profile |
+| `/debug/pprof/block` | Block contention profile |
+| `/debug/pprof/mutex` | Mutex contention profile |
+| `/debug/pprof/threadcreate` | Thread creation profile |
+| `/debug/pprof/trace?seconds=N` | Execution trace |
+
+**Usage Examples**:
+
+```bash
+# View metrics
+curl http://localhost:9090/metrics
+
+# CPU profile (30 seconds)
+curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30
+go tool pprof cpu.prof
+
+# Heap profile with visualization
+curl -o heap.prof http://localhost:9090/debug/pprof/heap
+go tool pprof -http=:8081 heap.prof
+
+# Check health
+curl http://localhost:9090/health
 ```
 
 ## Full-Stack Observability

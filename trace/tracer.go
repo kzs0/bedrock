@@ -47,9 +47,10 @@ func NewTracer(cfg TracerConfig) *Tracer {
 
 // StartSpanOptions configures span creation.
 type StartSpanOptions struct {
-	Kind   SpanKind
-	Attrs  []attr.Attr
-	Parent *Span
+	Kind         SpanKind
+	Attrs        []attr.Attr
+	Parent       *Span
+	RemoteParent *SpanContext // Remote parent from W3C Trace Context headers
 }
 
 // Start creates a new span.
@@ -68,11 +69,20 @@ func (t *Tracer) Start(ctx context.Context, name string, opts ...StartSpanOption
 	var traceID internal.TraceID
 	var parentID internal.SpanID
 	var parentSampled bool
+	var tracestate string
 
-	if parent != nil {
+	// Remote parent takes precedence over local parent
+	if options.RemoteParent != nil && options.RemoteParent.IsValid() {
+		traceID = options.RemoteParent.TraceID
+		parentID = options.RemoteParent.SpanID
+		parentSampled = options.RemoteParent.Sampled
+		tracestate = options.RemoteParent.Tracestate
+	} else if parent != nil {
 		traceID = parent.traceID
 		parentID = parent.spanID
 		parentSampled = true // If parent exists and wasn't dropped, it was sampled
+		// Inherit tracestate from parent span for propagation
+		tracestate = parent.tracestate
 	} else {
 		traceID = internal.NewTraceID()
 	}
@@ -93,14 +103,15 @@ func (t *Tracer) Start(ctx context.Context, name string, opts ...StartSpanOption
 	}
 
 	span := &Span{
-		name:      name,
-		traceID:   traceID,
-		spanID:    internal.NewSpanID(),
-		parentID:  parentID,
-		kind:      options.Kind,
-		startTime: time.Now(),
-		attrs:     attr.NewSet(options.Attrs...),
-		tracer:    t,
+		name:       name,
+		traceID:    traceID,
+		spanID:     internal.NewSpanID(),
+		parentID:   parentID,
+		kind:       options.Kind,
+		startTime:  time.Now(),
+		attrs:      attr.NewSet(options.Attrs...),
+		tracestate: tracestate,
+		tracer:     t,
 	}
 
 	return ContextWithSpan(ctx, span), span
@@ -156,5 +167,12 @@ func WithAttrs(attrs ...attr.Attr) StartSpanOption {
 func WithParent(parent *Span) StartSpanOption {
 	return func(o *StartSpanOptions) {
 		o.Parent = parent
+	}
+}
+
+// WithRemoteParent sets the remote parent from W3C Trace Context headers.
+func WithRemoteParent(parent SpanContext) StartSpanOption {
+	return func(o *StartSpanOptions) {
+		o.RemoteParent = &parent
 	}
 }
