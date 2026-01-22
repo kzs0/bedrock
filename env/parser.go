@@ -1,4 +1,4 @@
-package config
+package env
 
 import (
 	"reflect"
@@ -16,7 +16,7 @@ type tag struct {
 // parseTag parses the env struct tag.
 func parseTag(field reflect.StructField) (tag, error) {
 	envTag := field.Tag.Get("env")
-	if envTag == "" {
+	if envTag == "" || envTag == "-" {
 		return tag{}, nil
 	}
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kzs0/bedrock/config"
+	"github.com/kzs0/bedrock/env"
 	"github.com/kzs0/bedrock/trace"
 )
 
@@ -87,7 +87,7 @@ func DefaultConfig() Config {
 
 // FromEnv loads configuration from environment variables.
 func FromEnv() (Config, error) {
-	cfg, err := config.Parse[Config]()
+	cfg, err := env.Parse[Config]()
 	if err != nil {
 		return Config{}, fmt.Errorf("bedrock: failed to parse config from env: %w", err)
 	}
