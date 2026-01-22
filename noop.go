@@ -33,7 +33,7 @@ func noopBedrock() *Bedrock {
 			logger:     slog.New(handler),
 			logBridge:  bloglog.NewBridge(slog.New(handler)),
 			tracer:     trace.NewTracer(trace.TracerConfig{ServiceName: "noop"}),
-			metrics:    metric.NewRegistry(),
+			metrics:    metric.NewRegistry(""),
 			staticAttr: attr.NewSet(),
 			isNoop:     true,
 		}

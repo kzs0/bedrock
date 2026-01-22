@@ -387,6 +387,22 @@ func WithStaticAttrs(attrs ...attr.Attr) InitOption {
 	}
 }
 
+// WithLogLevel sets the log level for the bedrock instance.
+// Valid levels: "debug", "info", "warn", "error"
+// This is a convenience wrapper that modifies the config.
+//
+// Usage:
+//
+//	ctx, close := bedrock.Init(ctx, bedrock.WithLogLevel("debug"))
+func WithLogLevel(level string) InitOption {
+	return func(c *initConfig) {
+		if c.config == nil {
+			c.config = &Config{}
+		}
+		c.config.LogLevel = level
+	}
+}
+
 func applyInitOptions(opts []InitOption) initConfig {
 	cfg := initConfig{
 		config:      nil,
