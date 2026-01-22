@@ -1,4 +1,4 @@
-package config
+package env
 
 import (
 	"os"
@@ -192,5 +192,31 @@ func TestFrom(t *testing.T) {
 
 	if validated.Name != "test" {
 		t.Errorf("expected name 'test', got %q", validated.Name)
+	}
+}
+
+type IgnoredFieldConfig struct {
+	Name   string `env:"NAME"`
+	Secret string `env:"-"`
+}
+
+func TestIgnoredFields(t *testing.T) {
+	_ = os.Setenv("NAME", "test")
+	_ = os.Setenv("-", "should-be-ignored")
+	defer func() {
+		_ = os.Unsetenv("NAME")
+		_ = os.Unsetenv("-")
+	}()
+
+	cfg, err := Parse[IgnoredFieldConfig]()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Name != "test" {
+		t.Errorf("expected name 'test', got %q", cfg.Name)
+	}
+	if cfg.Secret != "" {
+		t.Errorf("expected secret to be empty (ignored), got %q", cfg.Secret)
 	}
 }

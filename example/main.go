@@ -12,7 +12,7 @@ import (
 
 	"github.com/kzs0/bedrock"
 	"github.com/kzs0/bedrock/attr"
-	"github.com/kzs0/bedrock/config"
+	"github.com/kzs0/bedrock/env"
 )
 
 type Config struct {
@@ -22,7 +22,7 @@ type Config struct {
 
 func main() {
 	ctx := context.Background()
-	cfg, err := config.Parse[Config]()
+	cfg, err := env.Parse[Config]()
 	if err != nil {
 		// Use defaults if config parsing fails
 		cfg = Config{

@@ -1,4 +1,4 @@
-package config
+package env
 
 import (
 	"fmt"
@@ -16,7 +16,7 @@ func ParseWithPrefix[T any](prefix string) (T, error) {
 	var cfg T
 	err := parseStruct(reflect.ValueOf(&cfg).Elem(), prefix)
 	if err != nil {
-		return cfg, fmt.Errorf("config: %w", err)
+		return cfg, fmt.Errorf("env: %w", err)
 	}
 	return cfg, nil
 }
@@ -27,7 +27,7 @@ func ParseWithPrefix[T any](prefix string) (T, error) {
 func From[T any](cfg T) (T, error) {
 	v := reflect.ValueOf(&cfg).Elem()
 	if err := validateStruct(v, ""); err != nil {
-		return cfg, fmt.Errorf("config: %w", err)
+		return cfg, fmt.Errorf("env: %w", err)
 	}
 	return cfg, nil
 }
