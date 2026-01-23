@@ -48,9 +48,10 @@ func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 
 	// Setup logging
 	handler := blog.NewHandler(&blog.HandlerOptions{
-		Level:  cfg.logLevel(),
-		Output: cfg.LogOutput,
-		Format: cfg.LogFormat,
+		Level:     cfg.logLevel(),
+		Output:    cfg.LogOutput,
+		Format:    cfg.LogFormat,
+		AddSource: cfg.LogAddSource,
 	})
 	handler.SetTraceContextFunc(func(ctx context.Context) (traceID, spanID string) {
 		span := trace.SpanFromContext(ctx)

@@ -33,6 +33,8 @@ type Config struct {
 	LogFormat string `env:"BEDROCK_LOG_FORMAT" envDefault:"json"`
 	// LogOutput is the log output writer. Defaults to os.Stderr.
 	LogOutput io.Writer `env:"-"`
+	// LogAddSource adds source code position to log output.
+	LogAddSource bool `env:"BEDROCK_LOG_ADD_SOURCE" envDefault:"true"`
 	// LogCanonical enables structured logging of operation completion.
 	LogCanonical bool `env:"BEDROCK_LOG_CANONICAL" envDefault:"false"`
 
@@ -73,6 +75,7 @@ func DefaultConfig() Config {
 		TraceSampleRate:         1.0,
 		LogLevel:                "info",
 		LogFormat:               "json",
+		LogAddSource:            true,
 		LogCanonical:            false,
 		ServerEnabled:           true,
 		ServerAddr:              ":9090",

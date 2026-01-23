@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -29,10 +28,10 @@ func main() {
 			Bedrock:  bedrock.DefaultConfig(),
 			LoopTerm: 10 * time.Second,
 		}
-		cfg.Bedrock.Service = "example-service"
-		// Enable observability server
-		cfg.Bedrock.ServerEnabled = true
 	}
+
+	cfg.Bedrock.Service = "example-service"
+	cfg.Bedrock.LogFormat = "text"
 
 	// Initialize bedrock - obs server starts automatically if enabled in config
 	ctx, close := bedrock.Init(ctx,
@@ -44,23 +43,25 @@ func main() {
 	)
 	defer close()
 
-	log.Println("Observability server listening on :9090")
-	log.Println("  - Metrics: http://localhost:9090/metrics")
-	log.Println("  - Health:  http://localhost:9090/health")
-	log.Println("  - Pprof:   http://localhost:9090/debug/pprof/")
-	log.Println("")
-	log.Println("Profiling:")
-	log.Println("  Manual profiling:")
-	log.Println("    - CPU profile (30s):  curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30")
-	log.Println("    - Heap profile:       curl -o heap.prof http://localhost:9090/debug/pprof/heap")
-	log.Println("    - Goroutine profile:  curl -o goroutine.prof http://localhost:9090/debug/pprof/goroutine")
-	log.Println("    - Analyze profile:    go tool pprof cpu.prof")
-	log.Println("")
-	log.Println("  Continuous profiling with Pyroscope + Grafana:")
-	log.Println("    1. Start: docker-compose up -d")
-	log.Println("    2. View:  http://localhost:3000 (Grafana)")
-	log.Println("    3. Pyroscope will scrape pprof endpoints every 15s")
-	log.Println("")
+	// Demonstrate different log levels
+	bedrock.Info(ctx, "Observability server listening on :9090",
+		attr.String("server.address", ":9090"),
+		attr.String("endpoints", "metrics, health, pprof"))
+
+	bedrock.Debug(ctx, "Available endpoints",
+		attr.String("metrics", "http://localhost:9090/metrics"),
+		attr.String("health", "http://localhost:9090/health"),
+		attr.String("pprof", "http://localhost:9090/debug/pprof/"))
+
+	bedrock.Info(ctx, "Manual profiling commands available",
+		attr.String("cpu_profile", "curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30"),
+		attr.String("heap_profile", "curl -o heap.prof http://localhost:9090/debug/pprof/heap"),
+		attr.String("goroutine_profile", "curl -o goroutine.prof http://localhost:9090/debug/pprof/goroutine"))
+
+	bedrock.Info(ctx, "Continuous profiling setup",
+		attr.String("compose_start", "docker-compose up -d"),
+		attr.String("grafana_url", "http://localhost:3000"),
+		attr.String("scrape_interval", "15s"))
 
 	// Setup HTTP server with security timeouts
 	mux := http.NewServeMux()
@@ -82,33 +83,36 @@ func main() {
 	// Start background loop
 	go func() {
 		if err := loop(ctx, cfg.LoopTerm); err != nil {
-			log.Printf("Loop error: %v", err)
+			bedrock.Error(ctx, "Loop error", attr.Error(err))
 		}
 	}()
 
 	// Start application server
 	go func() {
-		log.Println("Application server listening on :8080")
+		bedrock.Info(ctx, "Application server listening on :8080",
+			attr.String("server.address", ":8080"),
+			attr.String("server.type", "application"))
 		if err := appServer.ListenAndServe(); err != http.ErrServerClosed {
-			log.Printf("Application server error: %v", err)
+			bedrock.Error(ctx, "Application server error", attr.Error(err))
 		}
 	}()
 
 	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	sig := <-sigCh
 
-	log.Println("Shutting down...")
+	bedrock.Info(ctx, "Received shutdown signal",
+		attr.String("signal", sig.String()))
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := appServer.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Application server shutdown error: %v", err)
+		bedrock.Error(ctx, "Application server shutdown error", attr.Error(err))
 	}
 
-	log.Println("Goodbye!")
+	bedrock.Info(ctx, "Shutdown complete")
 }
 
 func handleUsers(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +181,21 @@ func helper(ctx context.Context) {
 	defer step.Done()
 
 	step.Register(ctx, attr.Int("helper_count", 1))
+
+	// Demonstrate different log levels
+	bedrock.Debug(ctx, "Helper function started", attr.String("step", "helper"))
+
+	// Simulate a warning condition
+	threshold := 0.8
+	currentUsage := 0.85
+	if currentUsage > threshold {
+		bedrock.Warn(ctx, "Resource usage above threshold",
+			attr.Float64("current_usage", currentUsage),
+			attr.Float64("threshold", threshold),
+			attr.String("resource", "memory"))
+	}
+
+	bedrock.Debug(ctx, "Helper function completed", attr.Int("operations_performed", 1))
 }
 
 // doWork demonstrates nested operations and convenient metrics API

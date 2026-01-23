@@ -21,9 +21,9 @@ bedrock/
 ├── bedrock (root)      - Core API, operations, initialization
 ├── attr/               - Type-safe attribute system
 ├── trace/              - Distributed tracing with W3C Trace Context
-│   └── otlp/          - OpenTelemetry Protocol export
+│   └── otlp/           - OpenTelemetry Protocol export
 ├── metric/             - Prometheus-style metrics
-│   └── prometheus/    - Prometheus exposition format
+│   └── prometheus/     - Prometheus exposition format
 ├── log/                - Structured logging (slog bridge)
 ├── server/             - Observability HTTP server
 ├── transport/          - HTTP client instrumentation
@@ -33,10 +33,10 @@ bedrock/
 ### Component Relationships
 
 ```
-┌─────────────────────────────────────────────┐
-│              Application Code                │
-│         bedrock.Init(ctx) → Context          │
-└────────────────┬────────────────────────────┘
+┌───────────────────────────────────┐
+│        Application Code           │
+│   bedrock.Init(ctx) → Context     │
+└────────────────┬──────────────────┘
                  │
     ┌────────────┼────────────┐
     │            │            │

@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/kzs0/bedrock/attr"
 )
@@ -32,7 +33,9 @@ type HandlerOptions struct {
 // NewHandler creates a new Handler with the given options.
 func NewHandler(opts *HandlerOptions) *Handler {
 	if opts == nil {
-		opts = &HandlerOptions{}
+		opts = &HandlerOptions{
+			AddSource: true, // Default to true
+		}
 	}
 
 	output := opts.Output
@@ -46,7 +49,7 @@ func NewHandler(opts *HandlerOptions) *Handler {
 		AddSource: opts.AddSource,
 	}
 
-	if opts.Format == "text" {
+	if strings.ToLower(opts.Format) == "text" {
 		inner = slog.NewTextHandler(output, handlerOpts)
 	} else {
 		inner = slog.NewJSONHandler(output, handlerOpts)
@@ -80,10 +83,9 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		}
 	}
 
-	// Add handler-level attributes
-	for _, a := range h.attrs {
-		r.AddAttrs(a)
-	}
+	// Note: handler-level attributes are already added by inner.WithAttrs()
+	// in the WithAttrs method below. We don't need to add them again here
+	// as that would cause duplication.
 
 	return h.inner.Handle(ctx, r)
 }
