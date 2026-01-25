@@ -466,13 +466,13 @@ handler := bedrock.HTTPMiddleware(ctx, mux,
 
 **Default Attributes**:
 - `http.method` - Request method (GET, POST, etc.)
-- `http.route` - Request path
+- `http.path` - Request path
 - `http.scheme` - http or https
 - `http.host` - Host header
 - `http.user_agent` - User-Agent header
 - `http.status_code` - Response status code
 
-**Default Metric Labels**: `http_method`, `http_route`, `http_status_code`
+**Default Metric Labels**: `http.method`, `http.path`, `http.status_code`
 
 ### HTTP Client Instrumentation
 
@@ -491,7 +491,7 @@ baseClient := &http.Client{Timeout: 30 * time.Second}
 client := bedrock.NewClient(baseClient)
 
 // Use like a normal http.Client
-resp, err := client.Get(ctx, url)
+resp, err := client.Get(url)
 ```
 
 **Automatic Behavior**:
@@ -675,9 +675,12 @@ Bedrock provides production-ready security defaults to protect against DoS attac
 **Observability Server** (metrics/pprof endpoints):
 
 ```go
+import "github.com/kzs0/bedrock/server"
+
 b := bedrock.FromContext(ctx)
-server := b.NewServer(bedrock.DefaultServerConfig())
-go server.ListenAndServe()
+cfg := server.DefaultConfig()
+obsServer := server.New(b.Metrics(), cfg)
+go obsServer.ListenAndServe()
 ```
 
 **Default Security Settings**:
@@ -705,11 +708,12 @@ go server.ListenAndServe()
 Override defaults for specific requirements:
 
 ```go
-server := b.NewServer(bedrock.ServerConfig{
+import "github.com/kzs0/bedrock/server"
+
+obsServer := server.New(b.Metrics(), server.Config{
     Addr:              ":9090",
     EnableMetrics:     true,
     EnablePprof:       true,
-    EnableHealth:      true,
     ReadTimeout:       5 * time.Second,
     ReadHeaderTimeout: 2 * time.Second,
     WriteTimeout:      10 * time.Second,
@@ -750,22 +754,24 @@ appServer.ListenAndServe()
 ### HTTP Service
 
 ```go
+import "github.com/kzs0/bedrock/server"
+
 func main() {
     ctx, close := bedrock.Init(context.Background())
     defer close()
-    
+
     // Start observability server
     b := bedrock.FromContext(ctx)
-    obsServer := b.NewServer(bedrock.DefaultServerConfig())
+    obsServer := server.New(b.Metrics(), server.DefaultConfig())
     go obsServer.ListenAndServe()
     // Metrics: http://localhost:9090/metrics
     // Health:  http://localhost:9090/health
     // Pprof:   http://localhost:9090/debug/pprof/
-    
+
     // Setup application server
     mux := http.NewServeMux()
     mux.HandleFunc("/", handler)
-    
+
     http.ListenAndServe(":8080", bedrock.HTTPMiddleware(ctx, mux))
 }
 
@@ -1034,14 +1040,14 @@ op.Register(ctx, attr.String("status", "active"))
 {
   "time": "2026-01-18T12:34:56Z",
   "level": "INFO",
-  "msg": "operation completed",
+  "msg": "operation.complete",
   "operation": "process_user",
-  "duration_ms": 123.45,
+  "duration_ms": 123,
   "success": true,
-  "user_id": "123",
-  "status": "active",
-  "trace_id": "abc123...",
-  "span_id": "def456..."
+  "attributes": {
+    "user_id": "123",
+    "status": "active"
+  }
 }
 ```
 
@@ -1080,14 +1086,15 @@ process_user_duration_ms_count{user_id="123",status="active",env="production"} 1
 The observability server provides metrics, profiling, and health check endpoints:
 
 ```go
+import "github.com/kzs0/bedrock/server"
+
 b := bedrock.FromContext(ctx)
-server := b.NewServer(bedrock.ServerConfig{
+obsServer := server.New(b.Metrics(), server.Config{
     Addr:          ":9090",
     EnableMetrics: true,
     EnablePprof:   true,
-    EnableHealth:  true,
 })
-go server.ListenAndServe()
+go obsServer.ListenAndServe()
 ```
 
 **Available Endpoints**:
