@@ -1,6 +1,50 @@
 # Bedrock
 
-An opinionated observability library for Go that provides tracing, metrics, profiling, and structured logging with automatic instrumentation.
+**Production-ready observability for Go.** Automatic tracing, metrics, and structured logging with zero external dependencies.
+
+Bedrock is an opinionated observability library that eliminates boilerplate by providing unified instrumentation for Go services. It combines distributed tracing (W3C Trace Context), Prometheus-compatible metrics, and structured logging (slog) into a single, cohesive API.
+
+```go
+ctx, close := bedrock.Init(context.Background())
+defer close()
+
+op, ctx := bedrock.Operation(ctx, "process_user")
+defer op.Done()
+// Automatically records: count, successes, failures, duration_ms metrics
+// Automatically creates: distributed trace span
+// Automatically logs: operation lifecycle (if canonical logging enabled)
+```
+
+## Why Bedrock?
+
+| Feature | Bedrock | OpenTelemetry-Go | go-kit | Custom Solution |
+|---------|---------|------------------|--------|-----------------|
+| Setup complexity | **3 lines** | 50+ lines | 30+ lines | 100+ lines |
+| Automatic metrics per operation | **4 (count, success, fail, duration)** | Manual | Manual | Manual |
+| Cardinality control | **Built-in** | Manual | Manual | Manual |
+| W3C Trace Context | **Automatic** | Automatic | Manual | Manual |
+| HTTP middleware | **1 line** | Multiple packages | Multiple packages | Build yourself |
+| External dependencies | **Zero** | Many | Several | Varies |
+| Production security defaults | **Built-in** | Manual | Manual | Manual |
+| Learning curve | **Minimal** | Steep | Moderate | High |
+
+### Problems Bedrock Solves
+
+**Problem: Observability requires too much boilerplate**
+- Before: 50+ lines to wire up tracing, metrics, and logging
+- After: 3 lines with bedrock
+
+**Problem: Metric cardinality explosion**
+- Before: Unbounded labels crash your metrics backend
+- After: Upfront `MetricLabels()` declaration prevents explosion by design
+
+**Problem: Distributed tracing is complex**
+- Before: Manual header injection/extraction across services
+- After: Automatic W3C Trace Context propagation via HTTP middleware/client
+
+**Problem: Multiple libraries to learn**
+- Before: OpenTelemetry + Prometheus client + slog + pprof
+- After: Single unified API
 
 ## Features
 
