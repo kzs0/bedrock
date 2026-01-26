@@ -367,6 +367,7 @@ defer close()
 **Options**:
 - `WithConfig(Config)` - Explicit configuration
 - `WithStaticAttrs(...attr.Attr)` - Static attributes for all operations
+- `WithLogLevel(string)` - Set log level ("debug", "info", "warn", "error")
 
 **Returns**: 
 - Updated context with bedrock instance
@@ -609,6 +610,7 @@ BEDROCK_TRACE_SAMPLE_RATE=1.0  # 0.0 to 1.0
 # Logging
 BEDROCK_LOG_LEVEL=info         # debug, info, warn, error
 BEDROCK_LOG_FORMAT=json        # json or text
+BEDROCK_LOG_ADD_SOURCE=true    # Add source code position to logs
 BEDROCK_LOG_CANONICAL=true     # Enable operation lifecycle logs
 
 # Metrics
@@ -650,16 +652,18 @@ ctx, close := bedrock.Init(ctx, bedrock.WithConfig(cfg))
 defer close()
 ```
 
-**Config Parsing**: Use `config.Parse[T]()` to parse custom config structs from environment variables:
+**Config Parsing**: Use `env.Parse[T]()` to parse custom config structs from environment variables:
 
 ```go
+import "github.com/kzs0/bedrock/env"
+
 type Config struct {
     Bedrock  bedrock.Config
     Port     int    `env:"PORT" envDefault:"8080"`
     Database string `env:"DATABASE_URL"`
 }
 
-cfg, err := config.Parse[Config]()
+cfg, err := env.Parse[Config]()
 if err != nil {
     // Handle error
 }
