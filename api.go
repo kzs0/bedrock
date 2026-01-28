@@ -166,15 +166,31 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 // Operation starts a new operation and returns the operation handle and updated context.
 // Success is the default state. Register errors via attr.Error() to mark as failure.
 //
+// Accepts both common options (Attrs, NoTrace) and operation-specific options (MetricLabels, etc).
+//
 // Usage:
 //
 //	op, ctx := bedrock.Operation(ctx, "process_user")
 //	defer op.Done()
 //
+//	op, ctx := bedrock.Operation(ctx, "hot_path", bedrock.NoTrace())
 //	op.Register(ctx, attr.String("user_id", "123"))
-func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, context.Context) {
+func Operation(ctx context.Context, name string, opts ...any) (*Op, context.Context) {
 	b := bedrockFromContext(ctx)
-	cfg := applyOperationOptions(name, opts)
+
+	// Separate common options from operation-specific options
+	var commonOpts []Option
+	var opOpts []OperationOption
+	for _, opt := range opts {
+		switch o := opt.(type) {
+		case Option:
+			commonOpts = append(commonOpts, o)
+		case OperationOption:
+			opOpts = append(opOpts, o)
+		}
+	}
+
+	cfg := applyOperationOptions(name, commonOpts, opOpts)
 
 	// Check for parent operation
 	parent := operationStateFromContext(ctx)
@@ -263,14 +279,16 @@ func Source(ctx context.Context, name string, opts ...SourceOption) (*Src, conte
 // Steps are part of their parent operation and contribute attributes/events to it.
 // Use this for helper functions where you want trace visibility but not separate metrics.
 //
+// Accepts common options (Attrs, NoTrace).
+//
 // Usage:
 //
 //	step := bedrock.Step(ctx, "helper")
 //	defer step.Done()
 //
-//	step := bedrock.Step(ctx, "helper", bedrock.StepAttrs(attr.String("key", "value")))
-//	step := bedrock.Step(ctx, "hot_path", bedrock.StepNoTrace())
-func Step(ctx context.Context, name string, opts ...StepOption) *OpStep {
+//	step := bedrock.Step(ctx, "helper", bedrock.Attrs(attr.String("key", "value")))
+//	step := bedrock.Step(ctx, "hot_path", bedrock.NoTrace())
+func Step(ctx context.Context, name string, opts ...Option) *OpStep {
 	return StepFromContext(ctx, name, opts...)
 }
 

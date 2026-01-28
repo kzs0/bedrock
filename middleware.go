@@ -55,7 +55,7 @@ func HTTPMiddleware(ctx context.Context, handler http.Handler, opts ...Middlewar
 		}
 
 		// Extract W3C Trace Context from headers if trace propagation is enabled
-		var opOpts []OperationOption
+		var opOpts []any
 		opOpts = append(opOpts, Attrs(attrs...))
 		opOpts = append(opOpts, MetricLabels(labels...))
 

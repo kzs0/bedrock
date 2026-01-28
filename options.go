@@ -5,6 +5,33 @@ import (
 	"github.com/kzs0/bedrock/trace"
 )
 
+// commonConfig is the interface for common configuration options
+// shared between operations and steps.
+type commonConfig interface {
+	addAttrs(attrs ...attr.Attr)
+	setNoTrace(v bool)
+}
+
+// Option is a common option that can be applied to both operations and steps.
+type Option func(commonConfig)
+
+// Attrs adds attributes to an operation or step.
+// For operations, these can be used to populate metric labels if the label was registered.
+func Attrs(attrs ...attr.Attr) Option {
+	return func(cfg commonConfig) {
+		cfg.addAttrs(attrs...)
+	}
+}
+
+// NoTrace disables tracing for this operation/step and all children.
+// Use this for hot code paths where trace telemetry would cause too much noise.
+// Metrics will still be recorded for operations.
+func NoTrace() Option {
+	return func(cfg commonConfig) {
+		cfg.setNoTrace(true)
+	}
+}
+
 // OperationOption configures an operation.
 type OperationOption func(*operationConfig)
 
@@ -19,12 +46,13 @@ type operationConfig struct {
 	noTrace      bool               // if true, skip tracing for this operation and children
 }
 
-// Attrs adds attributes to an operation.
-// These can be used to populate metric labels if the label was registered.
-func Attrs(attrs ...attr.Attr) OperationOption {
-	return func(cfg *operationConfig) {
-		cfg.attrs = append(cfg.attrs, attrs...)
-	}
+// Implement commonConfig interface for operationConfig
+func (c *operationConfig) addAttrs(attrs ...attr.Attr) {
+	c.attrs = append(c.attrs, attrs...)
+}
+
+func (c *operationConfig) setNoTrace(v bool) {
+	c.noTrace = v
 }
 
 // MetricLabels defines the label names for this operation's metrics upfront.
@@ -58,15 +86,6 @@ func WithRemoteParent(parent trace.SpanContext) OperationOption {
 	}
 }
 
-// NoTrace disables tracing for this operation and all child operations/steps.
-// Use this for hot code paths where trace telemetry would cause too much noise.
-// Metrics will still be recorded.
-func NoTrace() OperationOption {
-	return func(cfg *operationConfig) {
-		cfg.noTrace = true
-	}
-}
-
 // EndOption configures how an operation ends.
 type EndOption func(*endConfig)
 
@@ -95,14 +114,17 @@ func EndFailure(err error) EndOption {
 }
 
 // applyOperationOptions applies options to create an operation config.
-func applyOperationOptions(name string, opts []OperationOption) operationConfig {
+func applyOperationOptions(name string, commonOpts []Option, opOpts []OperationOption) operationConfig {
 	cfg := operationConfig{
 		name:         name,
 		attrs:        make([]attr.Attr, 0),
 		metricLabels: make([]string, 0),
 		success:      false,
 	}
-	for _, opt := range opts {
+	for _, opt := range commonOpts {
+		opt(&cfg)
+	}
+	for _, opt := range opOpts {
 		opt(&cfg)
 	}
 	return cfg
@@ -147,32 +169,23 @@ func applySourceOptions(name string, opts []SourceOption) sourceConfig {
 	return cfg
 }
 
-// StepOption configures a step.
-type StepOption func(*stepConfig)
-
 // stepConfig holds configuration for a step.
 type stepConfig struct {
 	attrs   []attr.Attr
 	noTrace bool // if true, skip tracing for this step
 }
 
-// StepAttrs adds attributes to a step.
-func StepAttrs(attrs ...attr.Attr) StepOption {
-	return func(cfg *stepConfig) {
-		cfg.attrs = append(cfg.attrs, attrs...)
-	}
+// Implement commonConfig interface for stepConfig
+func (c *stepConfig) addAttrs(attrs ...attr.Attr) {
+	c.attrs = append(c.attrs, attrs...)
 }
 
-// StepNoTrace disables tracing for this step.
-// Use this for hot code paths where trace telemetry would cause too much noise.
-func StepNoTrace() StepOption {
-	return func(cfg *stepConfig) {
-		cfg.noTrace = true
-	}
+func (c *stepConfig) setNoTrace(v bool) {
+	c.noTrace = v
 }
 
 // applyStepOptions applies options to create a step config.
-func applyStepOptions(opts []StepOption) stepConfig {
+func applyStepOptions(opts []Option) stepConfig {
 	cfg := stepConfig{
 		attrs: make([]attr.Attr, 0),
 	}
