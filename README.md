@@ -153,7 +153,13 @@ if err != nil {
 
 **Metric Labels**: Only attributes matching registered `MetricLabels` are used as metric labels. This prevents metric cardinality explosion. Missing labels default to `"_"`.
 
-**Operation Hierarchy**: Child operations inherit parent context and can have enumerated names when duplicated (e.g., `operation[1]`, `operation[2]`).
+**NoTrace Mode**: Use `NoTrace()` to disable tracing for hot code paths while still recording metrics:
+
+```go
+op, ctx := bedrock.Operation(ctx, "hot_path", bedrock.NoTrace())
+defer op.Done()
+// Metrics recorded, tracing skipped
+```
 
 ### 3. Sources
 
@@ -190,11 +196,11 @@ Steps are lightweight tracing spans for helper functions. They don't create sepa
 
 ```go
 func helper(ctx context.Context) {
-    step := bedrock.Step(ctx, "helper", 
-        attr.String("key", "value"),
+    step := bedrock.Step(ctx, "helper",
+        bedrock.Attrs(attr.String("key", "value")),
     )
     defer step.Done()
-    
+
     step.Register(ctx, attr.Int("count", 1))
     // Attributes/events propagate to parent operation
 }
@@ -203,8 +209,6 @@ func helper(ctx context.Context) {
 **When to use Steps vs Operations**:
 - **Steps**: Helper functions, internal logic, want trace visibility only
 - **Operations**: Major units of work, want full metrics and cardinality control
-
-**Step Enumeration**: Like operations, duplicate step names are automatically enumerated (e.g., `helper[1]`, `helper[2]`).
 
 ### 5. Success by Default
 
@@ -390,6 +394,7 @@ defer op.Done()
 **Options**:
 - `Attrs(...attr.Attr)` - Set initial attributes
 - `MetricLabels(...string)` - Define metric label names (controls cardinality)
+- `NoTrace()` - Disable tracing for this operation and children (metrics still recorded)
 
 **Op Methods**:
 - `Register(ctx, ...interface{})` - Add attributes, events, or errors
@@ -429,19 +434,23 @@ defer source.Done()
 
 ### Steps
 
-#### `Step(ctx, name, attrs...) *Step`
+#### `Step(ctx, name, opts...) *OpStep`
 
 Create a lightweight step for tracing.
 
 ```go
 step := bedrock.Step(ctx, "helper",
-    attr.String("key", "value"),
+    bedrock.Attrs(attr.String("key", "value")),
 )
 defer step.Done()
 ```
 
+**Options**:
+- `Attrs(...attr.Attr)` - Set initial attributes
+- `NoTrace()` - Skip tracing for this step
+
 **Step Methods**:
-- `Register(ctx, ...attr.Attr)` - Add attributes
+- `Register(ctx, ...Registrable)` - Add attributes or events
 - `Done()` - End step
 
 **Note**: Steps don't create separate metrics. They contribute to parent operation traces.
@@ -616,6 +625,7 @@ BEDROCK_LOG_CANONICAL=true     # Enable operation lifecycle logs
 # Metrics
 BEDROCK_METRIC_PREFIX=myapp    # Prefix for all metrics
 BEDROCK_METRIC_BUCKETS=5,10,25,50,100,250,500,1000  # Custom buckets (ms)
+BEDROCK_RUNTIME_METRICS=true   # Enable Go runtime metrics collection
 
 # Server (observability endpoints)
 BEDROCK_SERVER_ENABLED=false   # Auto-start server
@@ -643,6 +653,7 @@ cfg := bedrock.Config{
     LogFormat:       "json",
     LogCanonical:    true,
     MetricPrefix:    "myapp",
+    RuntimeMetrics:  true,
     ServerEnabled:   true,
     ServerAddr:      ":9090",
     ShutdownTimeout: 30 * time.Second,
@@ -1213,7 +1224,7 @@ go tool pprof goroutine.prof
 7. **Unified observability**: Logs, metrics, traces, and profiles all connected
 8. **Type-safe**: Compile-time safety for attributes and metrics
 9. **Zero allocations for noop**: When not initialized, all operations are no-ops
-10. **Enumeration support**: Handles duplicate operations/steps automatically
+10. **Selective tracing**: NoTrace() for hot paths where tracing would be too noisy
 
 ## License
 
