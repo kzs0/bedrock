@@ -16,6 +16,7 @@ type operationConfig struct {
 	success      bool               // whether the operation succeeded (for auto metrics)
 	failure      error              // error if operation failed
 	remoteParent *trace.SpanContext // remote parent from W3C Trace Context
+	noTrace      bool               // if true, skip tracing for this operation and children
 }
 
 // Attrs adds attributes to an operation.
@@ -54,6 +55,15 @@ func Failure(err error) OperationOption {
 func WithRemoteParent(parent trace.SpanContext) OperationOption {
 	return func(cfg *operationConfig) {
 		cfg.remoteParent = &parent
+	}
+}
+
+// NoTrace disables tracing for this operation and all child operations/steps.
+// Use this for hot code paths where trace telemetry would cause too much noise.
+// Metrics will still be recorded.
+func NoTrace() OperationOption {
+	return func(cfg *operationConfig) {
+		cfg.noTrace = true
 	}
 }
 
@@ -130,6 +140,41 @@ func applySourceOptions(name string, opts []SourceOption) sourceConfig {
 		name:         name,
 		attrs:        attr.NewSet(),
 		metricLabels: make([]string, 0),
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return cfg
+}
+
+// StepOption configures a step.
+type StepOption func(*stepConfig)
+
+// stepConfig holds configuration for a step.
+type stepConfig struct {
+	attrs   []attr.Attr
+	noTrace bool // if true, skip tracing for this step
+}
+
+// StepAttrs adds attributes to a step.
+func StepAttrs(attrs ...attr.Attr) StepOption {
+	return func(cfg *stepConfig) {
+		cfg.attrs = append(cfg.attrs, attrs...)
+	}
+}
+
+// StepNoTrace disables tracing for this step.
+// Use this for hot code paths where trace telemetry would cause too much noise.
+func StepNoTrace() StepOption {
+	return func(cfg *stepConfig) {
+		cfg.noTrace = true
+	}
+}
+
+// applyStepOptions applies options to create a step config.
+func applyStepOptions(opts []StepOption) stepConfig {
+	cfg := stepConfig{
+		attrs: make([]attr.Attr, 0),
 	}
 	for _, opt := range opts {
 		opt(&cfg)

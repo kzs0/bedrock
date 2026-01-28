@@ -13,6 +13,7 @@ import (
 // OpStep is a handle to a step within an operation.
 // Steps contribute their attributes to the parent operation.
 type OpStep struct {
+	name   string
 	span   *trace.Span
 	attrs  attr.Set
 	parent *operationState
@@ -34,10 +35,8 @@ type operationState struct {
 	success      bool
 	failure      error
 
-	// Child tracking for enumeration
-	steps        []*OpStep
-	stepCounts   map[string]int // count of steps by name for enumeration
-	childOpCount map[string]int // count of child operations by name
+	// Child tracking
+	steps []*OpStep
 }
 
 // newOperationState creates a new operation state.
@@ -52,8 +51,6 @@ func newOperationState(b *Bedrock, span *trace.Span, name string, cfg operationC
 		parent:       parent,
 		success:      true, // Default to success
 		steps:        make([]*OpStep, 0),
-		stepCounts:   make(map[string]int),
-		childOpCount: make(map[string]int),
 	}
 }
 
@@ -94,9 +91,11 @@ func (op *operationState) buildMetricLabels() []attr.Attr {
 		return true
 	})
 
-	// Add operation-specific labels
+	// Add operation-specific labels (search operation attrs first, then step attrs)
 	for _, labelName := range op.metricLabels {
 		found := false
+
+		// First check operation attributes
 		op.attrs.Range(func(a attr.Attr) bool {
 			if a.Key == labelName {
 				labels = append(labels, a)
@@ -105,6 +104,23 @@ func (op *operationState) buildMetricLabels() []attr.Attr {
 			}
 			return true
 		})
+
+		// If not found, check step attributes
+		if !found {
+			for _, step := range op.steps {
+				step.attrs.Range(func(a attr.Attr) bool {
+					if a.Key == labelName {
+						labels = append(labels, a)
+						found = true
+						return false // stop iteration
+					}
+					return true
+				})
+				if found {
+					break
+				}
+			}
+		}
 
 		if !found {
 			// Use "_" as default value for missing labels
@@ -207,7 +223,7 @@ func (op *operationState) logCanonical() {
 			return true
 		})
 		steps[i] = map[string]any{
-			"name":       step.span.Name(),
+			"name":       step.name,
 			"attributes": stepAttrs,
 		}
 	}
@@ -242,36 +258,31 @@ func (op *operationState) logCanonical() {
 //
 //	step := bedrock.Step(ctx, "helper")
 //	defer step.Done()
-func StepFromContext(ctx context.Context, name string, attrs ...attr.Attr) *OpStep {
+func StepFromContext(ctx context.Context, name string, opts ...StepOption) *OpStep {
 	b := bedrockFromContext(ctx)
+	cfg := applyStepOptions(opts)
 
 	// Get parent operation
 	parent := operationStateFromContext(ctx)
 
-	// Enumerate step name if multiple steps with same name
-	fullName := name
-	if parent != nil {
-		parent.mu.Lock()
-		count := parent.stepCounts[name]
-		parent.stepCounts[name] = count + 1
-		if count > 0 {
-			fullName = fmt.Sprintf("%s[%d]", name, count)
+	var span *trace.Span
+
+	// Skip tracing if no-trace mode is active (from context or step option)
+	if !isNoTrace(ctx) && !cfg.noTrace {
+		var parentCtx context.Context
+		if parent != nil && parent.span != nil {
+			parentCtx = trace.ContextWithSpan(ctx, parent.span)
+		} else {
+			parentCtx = ctx
 		}
-		parent.mu.Unlock()
-	}
 
-	var parentCtx context.Context
-	if parent != nil && parent.span != nil {
-		parentCtx = trace.ContextWithSpan(ctx, parent.span)
-	} else {
-		parentCtx = ctx
+		_, span = b.tracer.Start(parentCtx, name, trace.WithAttrs(cfg.attrs...))
 	}
-
-	_, span := b.tracer.Start(parentCtx, fullName, trace.WithAttrs(attrs...))
 
 	step := &OpStep{
+		name:   name,
 		span:   span,
-		attrs:  attr.NewSet(attrs...),
+		attrs:  attr.NewSet(cfg.attrs...),
 		parent: parent,
 		ctx:    ctx,
 	}
@@ -287,7 +298,7 @@ func StepFromContext(ctx context.Context, name string, attrs ...attr.Attr) *OpSt
 }
 
 // Register adds attributes or events to the step.
-// Attributes are propagated to the parent operation.
+// Attributes remain on the step but can be used as metric label values for the parent operation.
 // Events are recorded in traces.
 //
 // Usage:
@@ -316,11 +327,6 @@ func (s *OpStep) Register(ctx context.Context, items ...attr.Registrable) {
 			s.span.SetAttr(attrs...)
 		}
 		s.attrs = s.attrs.Merge(attrs...)
-
-		// Propagate to parent operation
-		if s.parent != nil {
-			s.parent.setAttr(attrs...)
-		}
 	}
 }
 

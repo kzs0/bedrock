@@ -179,19 +179,6 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 	// Check for parent operation
 	parent := operationStateFromContext(ctx)
 
-	// Enumerate if this is a child operation with duplicate name
-	fullName := name
-	if parent != nil {
-		parent.mu.Lock()
-		count := parent.childOpCount[name]
-		parent.childOpCount[name] = count + 1
-		if count > 0 {
-			fullName = fmt.Sprintf("%s[%d]", name, count)
-		}
-		parent.mu.Unlock()
-		cfg.name = fullName
-	}
-
 	// Check for source config and merge attributes/labels if present
 	if source := sourceConfigFromContext(ctx); source != nil {
 		// Merge source attributes
@@ -208,26 +195,37 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 		}
 
 		// Prefix operation name with source name
-		cfg.name = source.name + "." + fullName
+		cfg.name = source.name + "." + name
 	}
 
-	// Start trace span
-	var parentCtx context.Context
-	if parent != nil && parent.span != nil {
-		parentCtx = trace.ContextWithSpan(ctx, parent.span)
+	// Inherit no-trace mode from context or check if explicitly set
+	noTrace := cfg.noTrace || isNoTrace(ctx)
+
+	var span *trace.Span
+	var newCtx context.Context
+
+	if noTrace {
+		// Skip tracing, just pass through context with no-trace flag
+		newCtx = withNoTrace(ctx)
 	} else {
-		parentCtx = ctx
+		// Start trace span
+		var parentCtx context.Context
+		if parent != nil && parent.span != nil {
+			parentCtx = trace.ContextWithSpan(ctx, parent.span)
+		} else {
+			parentCtx = ctx
+		}
+
+		// Build span options
+		spanOpts := []trace.StartSpanOption{trace.WithAttrs(cfg.attrs...)}
+
+		// Add remote parent if provided (from W3C Trace Context)
+		if cfg.remoteParent != nil && cfg.remoteParent.IsValid() {
+			spanOpts = append(spanOpts, trace.WithRemoteParent(*cfg.remoteParent))
+		}
+
+		newCtx, span = b.tracer.Start(parentCtx, cfg.name, spanOpts...)
 	}
-
-	// Build span options
-	spanOpts := []trace.StartSpanOption{trace.WithAttrs(cfg.attrs...)}
-
-	// Add remote parent if provided (from W3C Trace Context)
-	if cfg.remoteParent != nil && cfg.remoteParent.IsValid() {
-		spanOpts = append(spanOpts, trace.WithRemoteParent(*cfg.remoteParent))
-	}
-
-	newCtx, span := b.tracer.Start(parentCtx, cfg.name, spanOpts...)
 
 	// Create operation state
 	state := newOperationState(b, span, cfg.name, cfg, parent)
@@ -269,8 +267,11 @@ func Source(ctx context.Context, name string, opts ...SourceOption) (*Src, conte
 //
 //	step := bedrock.Step(ctx, "helper")
 //	defer step.Done()
-func Step(ctx context.Context, name string, attrs ...attr.Attr) *OpStep {
-	return StepFromContext(ctx, name, attrs...)
+//
+//	step := bedrock.Step(ctx, "helper", bedrock.StepAttrs(attr.String("key", "value")))
+//	step := bedrock.Step(ctx, "hot_path", bedrock.StepNoTrace())
+func Step(ctx context.Context, name string, opts ...StepOption) *OpStep {
+	return StepFromContext(ctx, name, opts...)
 }
 
 // Register adds attributes or events to the operation.
