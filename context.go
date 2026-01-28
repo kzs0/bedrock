@@ -10,6 +10,7 @@ const (
 	bedrockKey contextKey = iota
 	operationKey
 	sourceKey
+	noTraceKey
 )
 
 // WithBedrock returns a context with the bedrock instance attached.
@@ -58,4 +59,15 @@ func sourceConfigFromContext(ctx context.Context) *sourceConfig {
 		return cfg
 	}
 	return nil
+}
+
+// withNoTrace stores the no-trace flag in the context.
+func withNoTrace(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noTraceKey, true)
+}
+
+// isNoTrace checks if tracing is disabled in the context.
+func isNoTrace(ctx context.Context) bool {
+	v, _ := ctx.Value(noTraceKey).(bool)
+	return v
 }

@@ -7,6 +7,12 @@ import (
 	"github.com/kzs0/bedrock/attr"
 )
 
+// Collector is an interface for collecting metrics before gathering.
+// Implementations should update their metrics when Collect is called.
+type Collector interface {
+	Collect()
+}
+
 // Registry is a thread-safe registry for metrics.
 type Registry struct {
 	mu         sync.RWMutex
@@ -14,6 +20,7 @@ type Registry struct {
 	counters   map[string]*Counter
 	gauges     map[string]*Gauge
 	histograms map[string]*Histogram
+	collectors []Collector
 }
 
 // NewRegistry creates a new metric registry with an optional prefix.
@@ -132,8 +139,27 @@ func (r *Registry) Histogram(name, help string, buckets []float64, labelNames ..
 	return h
 }
 
+// RegisterCollector adds a collector that will be called before gathering metrics.
+// This is useful for collectors that need to update metrics on-demand (e.g., runtime metrics).
+func (r *Registry) RegisterCollector(c Collector) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.collectors = append(r.collectors, c)
+}
+
 // Gather collects all metrics for exposition.
+// It first calls all registered collectors, then gathers all metric families.
 func (r *Registry) Gather() []MetricFamily {
+	// Call all registered collectors first (outside the read lock)
+	r.mu.RLock()
+	collectors := r.collectors
+	r.mu.RUnlock()
+
+	for _, c := range collectors {
+		c.Collect()
+	}
+
+	// Now gather all metrics
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 

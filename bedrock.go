@@ -21,8 +21,9 @@ type Bedrock struct {
 	metrics    *metric.Registry
 	staticAttr attr.Set
 
-	exporter       *otlp.Exporter
-	batchProcessor *otlp.BatchProcessor
+	exporter         *otlp.Exporter
+	batchProcessor   *otlp.BatchProcessor
+	runtimeCollector *metric.RuntimeCollector
 
 	isNoop bool // true if this is a noop instance
 }
@@ -104,6 +105,19 @@ func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 		Sampler:     sampler,
 		Exporter:    exporter,
 	})
+
+	// Setup runtime metrics collector if enabled
+	if cfg.RuntimeMetrics {
+		// Get static labels for runtime metrics
+		staticLabels := make([]attr.Attr, 0, b.staticAttr.Len())
+		b.staticAttr.Range(func(a attr.Attr) bool {
+			staticLabels = append(staticLabels, a)
+			return true
+		})
+
+		b.runtimeCollector = metric.NewRuntimeCollector(b.metrics, staticLabels...)
+		b.metrics.RegisterCollector(b.runtimeCollector)
+	}
 
 	return b, nil
 }

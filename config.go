@@ -43,6 +43,8 @@ type Config struct {
 	MetricPrefix string `env:"BEDROCK_METRIC_PREFIX"`
 	// MetricBuckets are the default histogram buckets.
 	MetricBuckets []float64 `env:"BEDROCK_METRIC_BUCKETS"`
+	// RuntimeMetrics enables automatic collection of Go runtime metrics.
+	RuntimeMetrics bool `env:"BEDROCK_RUNTIME_METRICS" envDefault:"true"`
 
 	// Server configuration
 	// ServerEnabled enables the automatic observability server.
@@ -77,6 +79,7 @@ func DefaultConfig() Config {
 		LogFormat:               "json",
 		LogAddSource:            true,
 		LogCanonical:            false,
+		RuntimeMetrics:          true,
 		ServerEnabled:           true,
 		ServerAddr:              ":9090",
 		ServerMetrics:           true,
