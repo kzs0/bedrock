@@ -153,7 +153,13 @@ if err != nil {
 
 **Metric Labels**: Only attributes matching registered `MetricLabels` are used as metric labels. This prevents metric cardinality explosion. Missing labels default to `"_"`.
 
-**Operation Hierarchy**: Child operations inherit parent context and can have enumerated names when duplicated (e.g., `operation[1]`, `operation[2]`).
+**NoTrace Mode**: Use `NoTrace()` to disable tracing for hot code paths while still recording metrics:
+
+```go
+op, ctx := bedrock.Operation(ctx, "hot_path", bedrock.NoTrace())
+defer op.Done()
+// Metrics recorded, tracing skipped
+```
 
 ### 3. Sources
 
@@ -190,11 +196,11 @@ Steps are lightweight tracing spans for helper functions. They don't create sepa
 
 ```go
 func helper(ctx context.Context) {
-    step := bedrock.Step(ctx, "helper", 
-        attr.String("key", "value"),
+    step := bedrock.Step(ctx, "helper",
+        bedrock.Attrs(attr.String("key", "value")),
     )
     defer step.Done()
-    
+
     step.Register(ctx, attr.Int("count", 1))
     // Attributes/events propagate to parent operation
 }
@@ -203,8 +209,6 @@ func helper(ctx context.Context) {
 **When to use Steps vs Operations**:
 - **Steps**: Helper functions, internal logic, want trace visibility only
 - **Operations**: Major units of work, want full metrics and cardinality control
-
-**Step Enumeration**: Like operations, duplicate step names are automatically enumerated (e.g., `helper[1]`, `helper[2]`).
 
 ### 5. Success by Default
 
@@ -367,6 +371,7 @@ defer close()
 **Options**:
 - `WithConfig(Config)` - Explicit configuration
 - `WithStaticAttrs(...attr.Attr)` - Static attributes for all operations
+- `WithLogLevel(string)` - Set log level ("debug", "info", "warn", "error")
 
 **Returns**: 
 - Updated context with bedrock instance
@@ -389,6 +394,7 @@ defer op.Done()
 **Options**:
 - `Attrs(...attr.Attr)` - Set initial attributes
 - `MetricLabels(...string)` - Define metric label names (controls cardinality)
+- `NoTrace()` - Disable tracing for this operation and children (metrics still recorded)
 
 **Op Methods**:
 - `Register(ctx, ...interface{})` - Add attributes, events, or errors
@@ -428,19 +434,23 @@ defer source.Done()
 
 ### Steps
 
-#### `Step(ctx, name, attrs...) *Step`
+#### `Step(ctx, name, opts...) *OpStep`
 
 Create a lightweight step for tracing.
 
 ```go
 step := bedrock.Step(ctx, "helper",
-    attr.String("key", "value"),
+    bedrock.Attrs(attr.String("key", "value")),
 )
 defer step.Done()
 ```
 
+**Options**:
+- `Attrs(...attr.Attr)` - Set initial attributes
+- `NoTrace()` - Skip tracing for this step
+
 **Step Methods**:
-- `Register(ctx, ...attr.Attr)` - Add attributes
+- `Register(ctx, ...Registrable)` - Add attributes or events
 - `Done()` - End step
 
 **Note**: Steps don't create separate metrics. They contribute to parent operation traces.
@@ -466,13 +476,13 @@ handler := bedrock.HTTPMiddleware(ctx, mux,
 
 **Default Attributes**:
 - `http.method` - Request method (GET, POST, etc.)
-- `http.route` - Request path
+- `http.path` - Request path
 - `http.scheme` - http or https
 - `http.host` - Host header
 - `http.user_agent` - User-Agent header
 - `http.status_code` - Response status code
 
-**Default Metric Labels**: `http_method`, `http_route`, `http_status_code`
+**Default Metric Labels**: `http.method`, `http.path`, `http.status_code`
 
 ### HTTP Client Instrumentation
 
@@ -491,7 +501,7 @@ baseClient := &http.Client{Timeout: 30 * time.Second}
 client := bedrock.NewClient(baseClient)
 
 // Use like a normal http.Client
-resp, err := client.Get(ctx, url)
+resp, err := client.Get(url)
 ```
 
 **Automatic Behavior**:
@@ -609,11 +619,13 @@ BEDROCK_TRACE_SAMPLE_RATE=1.0  # 0.0 to 1.0
 # Logging
 BEDROCK_LOG_LEVEL=info         # debug, info, warn, error
 BEDROCK_LOG_FORMAT=json        # json or text
+BEDROCK_LOG_ADD_SOURCE=true    # Add source code position to logs
 BEDROCK_LOG_CANONICAL=true     # Enable operation lifecycle logs
 
 # Metrics
 BEDROCK_METRIC_PREFIX=myapp    # Prefix for all metrics
 BEDROCK_METRIC_BUCKETS=5,10,25,50,100,250,500,1000  # Custom buckets (ms)
+BEDROCK_RUNTIME_METRICS=true   # Enable Go runtime metrics collection
 
 # Server (observability endpoints)
 BEDROCK_SERVER_ENABLED=false   # Auto-start server
@@ -641,6 +653,7 @@ cfg := bedrock.Config{
     LogFormat:       "json",
     LogCanonical:    true,
     MetricPrefix:    "myapp",
+    RuntimeMetrics:  true,
     ServerEnabled:   true,
     ServerAddr:      ":9090",
     ShutdownTimeout: 30 * time.Second,
@@ -650,16 +663,18 @@ ctx, close := bedrock.Init(ctx, bedrock.WithConfig(cfg))
 defer close()
 ```
 
-**Config Parsing**: Use `config.Parse[T]()` to parse custom config structs from environment variables:
+**Config Parsing**: Use `env.Parse[T]()` to parse custom config structs from environment variables:
 
 ```go
+import "github.com/kzs0/bedrock/env"
+
 type Config struct {
     Bedrock  bedrock.Config
     Port     int    `env:"PORT" envDefault:"8080"`
     Database string `env:"DATABASE_URL"`
 }
 
-cfg, err := config.Parse[Config]()
+cfg, err := env.Parse[Config]()
 if err != nil {
     // Handle error
 }
@@ -675,9 +690,12 @@ Bedrock provides production-ready security defaults to protect against DoS attac
 **Observability Server** (metrics/pprof endpoints):
 
 ```go
+import "github.com/kzs0/bedrock/server"
+
 b := bedrock.FromContext(ctx)
-server := b.NewServer(bedrock.DefaultServerConfig())
-go server.ListenAndServe()
+cfg := server.DefaultConfig()
+obsServer := server.New(b.Metrics(), cfg)
+go obsServer.ListenAndServe()
 ```
 
 **Default Security Settings**:
@@ -705,11 +723,12 @@ go server.ListenAndServe()
 Override defaults for specific requirements:
 
 ```go
-server := b.NewServer(bedrock.ServerConfig{
+import "github.com/kzs0/bedrock/server"
+
+obsServer := server.New(b.Metrics(), server.Config{
     Addr:              ":9090",
     EnableMetrics:     true,
     EnablePprof:       true,
-    EnableHealth:      true,
     ReadTimeout:       5 * time.Second,
     ReadHeaderTimeout: 2 * time.Second,
     WriteTimeout:      10 * time.Second,
@@ -750,22 +769,24 @@ appServer.ListenAndServe()
 ### HTTP Service
 
 ```go
+import "github.com/kzs0/bedrock/server"
+
 func main() {
     ctx, close := bedrock.Init(context.Background())
     defer close()
-    
+
     // Start observability server
     b := bedrock.FromContext(ctx)
-    obsServer := b.NewServer(bedrock.DefaultServerConfig())
+    obsServer := server.New(b.Metrics(), server.DefaultConfig())
     go obsServer.ListenAndServe()
     // Metrics: http://localhost:9090/metrics
     // Health:  http://localhost:9090/health
     // Pprof:   http://localhost:9090/debug/pprof/
-    
+
     // Setup application server
     mux := http.NewServeMux()
     mux.HandleFunc("/", handler)
-    
+
     http.ListenAndServe(":8080", bedrock.HTTPMiddleware(ctx, mux))
 }
 
@@ -1034,14 +1055,14 @@ op.Register(ctx, attr.String("status", "active"))
 {
   "time": "2026-01-18T12:34:56Z",
   "level": "INFO",
-  "msg": "operation completed",
+  "msg": "operation.complete",
   "operation": "process_user",
-  "duration_ms": 123.45,
+  "duration_ms": 123,
   "success": true,
-  "user_id": "123",
-  "status": "active",
-  "trace_id": "abc123...",
-  "span_id": "def456..."
+  "attributes": {
+    "user_id": "123",
+    "status": "active"
+  }
 }
 ```
 
@@ -1080,14 +1101,15 @@ process_user_duration_ms_count{user_id="123",status="active",env="production"} 1
 The observability server provides metrics, profiling, and health check endpoints:
 
 ```go
+import "github.com/kzs0/bedrock/server"
+
 b := bedrock.FromContext(ctx)
-server := b.NewServer(bedrock.ServerConfig{
+obsServer := server.New(b.Metrics(), server.Config{
     Addr:          ":9090",
     EnableMetrics: true,
     EnablePprof:   true,
-    EnableHealth:  true,
 })
-go server.ListenAndServe()
+go obsServer.ListenAndServe()
 ```
 
 **Available Endpoints**:
@@ -1202,7 +1224,7 @@ go tool pprof goroutine.prof
 7. **Unified observability**: Logs, metrics, traces, and profiles all connected
 8. **Type-safe**: Compile-time safety for attributes and metrics
 9. **Zero allocations for noop**: When not initialized, all operations are no-ops
-10. **Enumeration support**: Handles duplicate operations/steps automatically
+10. **Selective tracing**: NoTrace() for hot paths where tracing would be too noisy
 
 ## License
 
