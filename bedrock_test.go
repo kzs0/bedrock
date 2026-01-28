@@ -270,7 +270,7 @@ func TestStep(t *testing.T) {
 
 	// Now create a step
 	step := Step(ctx, "helper",
-		attr.String("key", "value"),
+		Attrs(attr.String("key", "value")),
 	)
 	defer step.Done()
 

@@ -166,11 +166,14 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 // Operation starts a new operation and returns the operation handle and updated context.
 // Success is the default state. Register errors via attr.Error() to mark as failure.
 //
+// Accepts both common options (Attrs, NoTrace) and operation-specific options (MetricLabels, etc).
+//
 // Usage:
 //
 //	op, ctx := bedrock.Operation(ctx, "process_user")
 //	defer op.Done()
 //
+//	op, ctx := bedrock.Operation(ctx, "hot_path", bedrock.NoTrace())
 //	op.Register(ctx, attr.String("user_id", "123"))
 func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, context.Context) {
 	b := bedrockFromContext(ctx)
@@ -178,19 +181,6 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 
 	// Check for parent operation
 	parent := operationStateFromContext(ctx)
-
-	// Enumerate if this is a child operation with duplicate name
-	fullName := name
-	if parent != nil {
-		parent.mu.Lock()
-		count := parent.childOpCount[name]
-		parent.childOpCount[name] = count + 1
-		if count > 0 {
-			fullName = fmt.Sprintf("%s[%d]", name, count)
-		}
-		parent.mu.Unlock()
-		cfg.name = fullName
-	}
 
 	// Check for source config and merge attributes/labels if present
 	if source := sourceConfigFromContext(ctx); source != nil {
@@ -208,26 +198,37 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 		}
 
 		// Prefix operation name with source name
-		cfg.name = source.name + "." + fullName
+		cfg.name = source.name + "." + name
 	}
 
-	// Start trace span
-	var parentCtx context.Context
-	if parent != nil && parent.span != nil {
-		parentCtx = trace.ContextWithSpan(ctx, parent.span)
+	// Inherit no-trace mode from context or check if explicitly set
+	noTrace := cfg.noTrace || isNoTrace(ctx)
+
+	var span *trace.Span
+	var newCtx context.Context
+
+	if noTrace {
+		// Skip tracing, just pass through context with no-trace flag
+		newCtx = withNoTrace(ctx)
 	} else {
-		parentCtx = ctx
+		// Start trace span
+		var parentCtx context.Context
+		if parent != nil && parent.span != nil {
+			parentCtx = trace.ContextWithSpan(ctx, parent.span)
+		} else {
+			parentCtx = ctx
+		}
+
+		// Build span options
+		spanOpts := []trace.StartSpanOption{trace.WithAttrs(cfg.attrs...)}
+
+		// Add remote parent if provided (from W3C Trace Context)
+		if cfg.remoteParent != nil && cfg.remoteParent.IsValid() {
+			spanOpts = append(spanOpts, trace.WithRemoteParent(*cfg.remoteParent))
+		}
+
+		newCtx, span = b.tracer.Start(parentCtx, cfg.name, spanOpts...)
 	}
-
-	// Build span options
-	spanOpts := []trace.StartSpanOption{trace.WithAttrs(cfg.attrs...)}
-
-	// Add remote parent if provided (from W3C Trace Context)
-	if cfg.remoteParent != nil && cfg.remoteParent.IsValid() {
-		spanOpts = append(spanOpts, trace.WithRemoteParent(*cfg.remoteParent))
-	}
-
-	newCtx, span := b.tracer.Start(parentCtx, cfg.name, spanOpts...)
 
 	// Create operation state
 	state := newOperationState(b, span, cfg.name, cfg, parent)
@@ -265,12 +266,17 @@ func Source(ctx context.Context, name string, opts ...SourceOption) (*Src, conte
 // Steps are part of their parent operation and contribute attributes/events to it.
 // Use this for helper functions where you want trace visibility but not separate metrics.
 //
+// Accepts common options (Attrs, NoTrace).
+//
 // Usage:
 //
 //	step := bedrock.Step(ctx, "helper")
 //	defer step.Done()
-func Step(ctx context.Context, name string, attrs ...attr.Attr) *OpStep {
-	return StepFromContext(ctx, name, attrs...)
+//
+//	step := bedrock.Step(ctx, "helper", bedrock.Attrs(attr.String("key", "value")))
+//	step := bedrock.Step(ctx, "hot_path", bedrock.NoTrace())
+func Step(ctx context.Context, name string, opts ...StepOption) *OpStep {
+	return StepFromContext(ctx, name, opts...)
 }
 
 // Register adds attributes or events to the operation.
