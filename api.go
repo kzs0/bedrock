@@ -175,22 +175,9 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 //
 //	op, ctx := bedrock.Operation(ctx, "hot_path", bedrock.NoTrace())
 //	op.Register(ctx, attr.String("user_id", "123"))
-func Operation(ctx context.Context, name string, opts ...any) (*Op, context.Context) {
+func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, context.Context) {
 	b := bedrockFromContext(ctx)
-
-	// Separate common options from operation-specific options
-	var commonOpts []Option
-	var opOpts []OperationOption
-	for _, opt := range opts {
-		switch o := opt.(type) {
-		case Option:
-			commonOpts = append(commonOpts, o)
-		case OperationOption:
-			opOpts = append(opOpts, o)
-		}
-	}
-
-	cfg := applyOperationOptions(name, commonOpts, opOpts)
+	cfg := applyOperationOptions(name, opts)
 
 	// Check for parent operation
 	parent := operationStateFromContext(ctx)
@@ -288,7 +275,7 @@ func Source(ctx context.Context, name string, opts ...SourceOption) (*Src, conte
 //
 //	step := bedrock.Step(ctx, "helper", bedrock.Attrs(attr.String("key", "value")))
 //	step := bedrock.Step(ctx, "hot_path", bedrock.NoTrace())
-func Step(ctx context.Context, name string, opts ...Option) *OpStep {
+func Step(ctx context.Context, name string, opts ...StepOption) *OpStep {
 	return StepFromContext(ctx, name, opts...)
 }
 

@@ -258,7 +258,7 @@ func (op *operationState) logCanonical() {
 //
 //	step := bedrock.Step(ctx, "helper")
 //	defer step.Done()
-func StepFromContext(ctx context.Context, name string, opts ...Option) *OpStep {
+func StepFromContext(ctx context.Context, name string, opts ...StepOption) *OpStep {
 	b := bedrockFromContext(ctx)
 	cfg := applyStepOptions(opts)
 

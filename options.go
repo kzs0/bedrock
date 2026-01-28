@@ -5,35 +5,62 @@ import (
 	"github.com/kzs0/bedrock/trace"
 )
 
-// commonConfig is the interface for common configuration options
-// shared between operations and steps.
-type commonConfig interface {
-	addAttrs(attrs ...attr.Attr)
-	setNoTrace(v bool)
+// OperationOption configures an operation.
+type OperationOption interface {
+	applyToOperation(*operationConfig)
 }
 
-// Option is a common option that can be applied to both operations and steps.
-type Option func(commonConfig)
+// StepOption configures a step.
+type StepOption interface {
+	applyToStep(*stepConfig)
+}
+
+// commonOption is an option that works on both operations and steps.
+// It implements both OperationOption and StepOption interfaces.
+type commonOption struct {
+	applyAttrs   []attr.Attr
+	applyNoTrace bool
+}
+
+func (o commonOption) applyToOperation(c *operationConfig) {
+	if len(o.applyAttrs) > 0 {
+		c.attrs = append(c.attrs, o.applyAttrs...)
+	}
+	if o.applyNoTrace {
+		c.noTrace = true
+	}
+}
+
+func (o commonOption) applyToStep(c *stepConfig) {
+	if len(o.applyAttrs) > 0 {
+		c.attrs = append(c.attrs, o.applyAttrs...)
+	}
+	if o.applyNoTrace {
+		c.noTrace = true
+	}
+}
 
 // Attrs adds attributes to an operation or step.
 // For operations, these can be used to populate metric labels if the label was registered.
-func Attrs(attrs ...attr.Attr) Option {
-	return func(cfg commonConfig) {
-		cfg.addAttrs(attrs...)
-	}
+func Attrs(attrs ...attr.Attr) commonOption {
+	return commonOption{applyAttrs: attrs}
 }
 
 // NoTrace disables tracing for this operation/step and all children.
 // Use this for hot code paths where trace telemetry would cause too much noise.
 // Metrics will still be recorded for operations.
-func NoTrace() Option {
-	return func(cfg commonConfig) {
-		cfg.setNoTrace(true)
-	}
+func NoTrace() commonOption {
+	return commonOption{applyNoTrace: true}
 }
 
-// OperationOption configures an operation.
-type OperationOption func(*operationConfig)
+// operationOnlyOption is an option that only works on operations.
+type operationOnlyOption struct {
+	fn func(*operationConfig)
+}
+
+func (o operationOnlyOption) applyToOperation(c *operationConfig) {
+	o.fn(c)
+}
 
 // operationConfig holds configuration for an operation.
 type operationConfig struct {
@@ -46,44 +73,35 @@ type operationConfig struct {
 	noTrace      bool               // if true, skip tracing for this operation and children
 }
 
-// Implement commonConfig interface for operationConfig
-func (c *operationConfig) addAttrs(attrs ...attr.Attr) {
-	c.attrs = append(c.attrs, attrs...)
-}
-
-func (c *operationConfig) setNoTrace(v bool) {
-	c.noTrace = v
-}
-
 // MetricLabels defines the label names for this operation's metrics upfront.
 // If a label is defined but no attribute with that key is set, the value will be "_".
 // This prevents unlimited cardinality by pre-defining all possible label dimensions.
-func MetricLabels(labelNames ...string) OperationOption {
-	return func(cfg *operationConfig) {
+func MetricLabels(labelNames ...string) operationOnlyOption {
+	return operationOnlyOption{fn: func(cfg *operationConfig) {
 		cfg.metricLabels = append(cfg.metricLabels, labelNames...)
-	}
+	}}
 }
 
 // Success marks the operation as successful (affects auto-generated success/failure metrics).
-func Success() OperationOption {
-	return func(cfg *operationConfig) {
+func Success() operationOnlyOption {
+	return operationOnlyOption{fn: func(cfg *operationConfig) {
 		cfg.success = true
-	}
+	}}
 }
 
 // Failure marks the operation as failed with an error.
-func Failure(err error) OperationOption {
-	return func(cfg *operationConfig) {
+func Failure(err error) operationOnlyOption {
+	return operationOnlyOption{fn: func(cfg *operationConfig) {
 		cfg.success = false
 		cfg.failure = err
-	}
+	}}
 }
 
 // WithRemoteParent sets the remote parent from W3C Trace Context headers.
-func WithRemoteParent(parent trace.SpanContext) OperationOption {
-	return func(cfg *operationConfig) {
+func WithRemoteParent(parent trace.SpanContext) operationOnlyOption {
+	return operationOnlyOption{fn: func(cfg *operationConfig) {
 		cfg.remoteParent = &parent
-	}
+	}}
 }
 
 // EndOption configures how an operation ends.
@@ -114,18 +132,15 @@ func EndFailure(err error) EndOption {
 }
 
 // applyOperationOptions applies options to create an operation config.
-func applyOperationOptions(name string, commonOpts []Option, opOpts []OperationOption) operationConfig {
+func applyOperationOptions(name string, opts []OperationOption) operationConfig {
 	cfg := operationConfig{
 		name:         name,
 		attrs:        make([]attr.Attr, 0),
 		metricLabels: make([]string, 0),
 		success:      false,
 	}
-	for _, opt := range commonOpts {
-		opt(&cfg)
-	}
-	for _, opt := range opOpts {
-		opt(&cfg)
+	for _, opt := range opts {
+		opt.applyToOperation(&cfg)
 	}
 	return cfg
 }
@@ -175,22 +190,13 @@ type stepConfig struct {
 	noTrace bool // if true, skip tracing for this step
 }
 
-// Implement commonConfig interface for stepConfig
-func (c *stepConfig) addAttrs(attrs ...attr.Attr) {
-	c.attrs = append(c.attrs, attrs...)
-}
-
-func (c *stepConfig) setNoTrace(v bool) {
-	c.noTrace = v
-}
-
 // applyStepOptions applies options to create a step config.
-func applyStepOptions(opts []Option) stepConfig {
+func applyStepOptions(opts []StepOption) stepConfig {
 	cfg := stepConfig{
 		attrs: make([]attr.Attr, 0),
 	}
 	for _, opt := range opts {
-		opt(&cfg)
+		opt.applyToStep(&cfg)
 	}
 	return cfg
 }
