@@ -89,7 +89,13 @@ var hpackStaticTable = [62]struct{ name, value string }{
 //	content-type: application/grpc+proto
 //	te: trailers
 func EncodeRequestHeaders(authority, path string, tls bool) []byte {
-	var b []byte
+	// Pre-size to hold all headers in one allocation:
+	//   2  indexed (:method, :scheme)
+	//   4  prefix+length bytes for :authority + authority string
+	//   4  prefix+length bytes for :path + path string
+	//  36  content-type: application/grpc+proto (literal new name + value)
+	//  13  te: trailers
+	b := make([]byte, 0, 2+4+len(authority)+4+len(path)+49)
 
 	// :method: POST → indexed(3) = 0x83
 	b = append(b, 0x83)

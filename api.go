@@ -177,6 +177,9 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 //	op.Register(ctx, attr.String("user_id", "123"))
 func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, context.Context) {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return globalNoopOp, ctx
+	}
 	cfg := applyOperationOptions(name, opts)
 
 	// Check for parent operation
@@ -461,6 +464,9 @@ func Histogram(ctx context.Context, name, help string, buckets []float64, labelN
 //	bedrock.Debug(ctx, "processing request", attr.String("user_id", "123"))
 func Debug(ctx context.Context, msg string, attrs ...attr.Attr) {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return
+	}
 	b.logBridge.Debug(ctx, msg, attrs...)
 }
 
@@ -472,6 +478,9 @@ func Debug(ctx context.Context, msg string, attrs ...attr.Attr) {
 //	bedrock.Info(ctx, "request completed", attr.Int("status", 200))
 func Info(ctx context.Context, msg string, attrs ...attr.Attr) {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return
+	}
 	b.logBridge.Info(ctx, msg, attrs...)
 }
 
@@ -483,6 +492,9 @@ func Info(ctx context.Context, msg string, attrs ...attr.Attr) {
 //	bedrock.Warn(ctx, "high latency detected", attr.Duration("latency", 5*time.Second))
 func Warn(ctx context.Context, msg string, attrs ...attr.Attr) {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return
+	}
 	b.logBridge.Warn(ctx, msg, attrs...)
 }
 
@@ -494,6 +506,9 @@ func Warn(ctx context.Context, msg string, attrs ...attr.Attr) {
 //	bedrock.Error(ctx, "database connection failed", attr.Error(err))
 func Error(ctx context.Context, msg string, attrs ...attr.Attr) {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return
+	}
 	b.logBridge.Error(ctx, msg, attrs...)
 }
 
@@ -505,5 +520,8 @@ func Error(ctx context.Context, msg string, attrs ...attr.Attr) {
 //	bedrock.Log(ctx, slog.LevelInfo, "custom log", attr.String("key", "value"))
 func Log(ctx context.Context, level slog.Level, msg string, attrs ...attr.Attr) {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return
+	}
 	b.logBridge.Log(ctx, level, msg, attrs...)
 }

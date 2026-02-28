@@ -13,6 +13,7 @@ import (
 // OpStep is a handle to a step within an operation.
 // Steps contribute their attributes to the parent operation.
 type OpStep struct {
+	noop   bool // true = pre-allocated singleton; all methods fast-return
 	name   string
 	span   *trace.Span
 	attrs  attr.Set
@@ -234,6 +235,9 @@ func (op *operationState) logCanonical(duration time.Duration) {
 //	defer step.Done()
 func StepFromContext(ctx context.Context, name string, opts ...StepOption) *OpStep {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return globalNoopStep
+	}
 	cfg := applyStepOptions(opts)
 
 	// Get parent operation
@@ -277,9 +281,10 @@ func StepFromContext(ctx context.Context, name string, opts ...StepOption) *OpSt
 //	    attr.String("rows", "42"),
 //	)
 func (s *OpStep) Register(ctx context.Context, attrs ...attr.Attr) {
-	if len(attrs) > 0 {
-		s.attrs = s.attrs.Merge(attrs...)
+	if s.noop || len(attrs) == 0 {
+		return
 	}
+	s.attrs = s.attrs.Merge(attrs...)
 }
 
 // Event records a trace event on the step span.
@@ -295,8 +300,9 @@ func (s *OpStep) Event(ctx context.Context, event attr.Event) {
 
 // Done ends the step, syncing accumulated attrs to the span in one shot.
 func (s *OpStep) Done() {
-	if s.span != nil {
-		s.span.SetAttrSet(s.attrs)
-		s.span.End()
+	if s.noop || s.span == nil {
+		return
 	}
+	s.span.SetAttrSet(s.attrs)
+	s.span.End()
 }

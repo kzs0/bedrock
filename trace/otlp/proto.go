@@ -1,7 +1,6 @@
 package otlp
 
 import (
-	"encoding/binary"
 	"math"
 
 	"github.com/kzs0/bedrock/attr"
@@ -25,127 +24,120 @@ import (
 //	Status.message=2, code=3
 //	KeyValue.key=1, value=2
 //	AnyValue: string_value=1, bool_value=2, int_value=3, double_value=4, bytes_value=7
+//
+// All encoding is done into a single growing buffer using a begin/end message
+// pattern that backpatches length varints, eliminating per-field allocations.
 func ProtoEncodeSpans(spans []*trace.Span, serviceName string, resource attr.Set) ([]byte, error) {
 	if len(spans) == 0 {
 		return nil, nil
 	}
 
-	// Build resource attributes
-	var resourceBuf protoBuf
-	resourceBuf.appendMessage(1, encodeResourceAttrs(serviceName, resource))
-
-	// Build scope spans
-	var scopeSpansBuf protoBuf
-	// InstrumentationScope
-	var scopeBuf protoBuf
-	scopeBuf.appendString(1, "bedrock")
-	scopeBuf.appendString(2, "1.0.0")
-	scopeSpansBuf.appendMessage(1, scopeBuf.data)
-	// Spans
-	for _, s := range spans {
-		scopeSpansBuf.appendMessage(2, encodeProtoSpan(s))
-	}
-
-	// Build ResourceSpans
-	var rsBuf protoBuf
-	rsBuf.appendMessage(1, resourceBuf.data)
-	rsBuf.appendMessage(2, scopeSpansBuf.data)
-
-	// Wrap in ExportTraceServiceRequest
-	var req protoBuf
-	req.appendMessage(1, rsBuf.data)
-	return req.data, nil
-}
-
-func encodeResourceAttrs(serviceName string, resource attr.Set) []byte {
-	var b protoBuf
-	b.appendMessage(1, encodeKeyValueProto("service.name", attr.StringValue(serviceName)))
+	// Estimate capacity: ~200 bytes per span + resource overhead.
+	est := 200*len(spans) + 64 + len(serviceName)
 	resource.Range(func(a attr.Attr) bool {
-		b.appendMessage(1, encodeKeyValueProto(a.Key, a.Value))
+		est += len(a.Key) + 32
 		return true
 	})
-	return b.data
+
+	var b protoBuf
+	b.data = make([]byte, 0, est)
+
+	// ExportTraceServiceRequest.resource_spans (field 1)
+	off0 := b.beginMsg(1)
+
+	// ResourceSpans.resource (field 1)
+	off1 := b.beginMsg(1)
+	b.appendKV(1, "service.name", attr.StringValue(serviceName))
+	resource.Range(func(a attr.Attr) bool {
+		b.appendKV(1, a.Key, a.Value)
+		return true
+	})
+	b.endMsg(off1)
+
+	// ResourceSpans.scope_spans (field 2)
+	off2 := b.beginMsg(2)
+
+	// ScopeSpans.scope (InstrumentationScope, field 1)
+	off3 := b.beginMsg(1)
+	b.appendString(1, "bedrock")
+	b.appendString(2, "1.0.0")
+	b.endMsg(off3)
+
+	// ScopeSpans.spans (field 2) — one entry per span
+	for _, s := range spans {
+		off4 := b.beginMsg(2)
+		b.appendSpan(s)
+		b.endMsg(off4)
+	}
+	b.endMsg(off2)
+
+	b.endMsg(off0)
+	return b.data, nil
 }
 
-func encodeProtoSpan(s *trace.Span) []byte {
-	var b protoBuf
-
-	// trace_id (bytes, field 1) - 16 raw bytes
+// appendSpan writes all fields of a span into b.
+func (b *protoBuf) appendSpan(s *trace.Span) {
 	tid := s.TraceID()
 	b.appendBytes(1, tid[:])
 
-	// span_id (bytes, field 2) - 8 raw bytes
 	sid := s.SpanID()
 	b.appendBytes(2, sid[:])
 
-	// parent_span_id (bytes, field 4) - 8 raw bytes, omit if zero
 	if !s.ParentID().IsZero() {
 		pid := s.ParentID()
 		b.appendBytes(4, pid[:])
 	}
 
-	// name (string, field 5)
 	b.appendString(5, s.Name())
-
-	// kind (enum/int32, field 6)
 	b.appendVarintField(6, uint64(spanKindToOTLPProto(s.Kind())))
-
-	// start_time_unix_nano (fixed64, field 7)
 	b.appendFixed64(7, uint64(s.StartTime().UnixNano()))
-
-	// end_time_unix_nano (fixed64, field 8)
 	b.appendFixed64(8, uint64(s.EndTime().UnixNano()))
 
-	// attributes (repeated KeyValue, field 9)
 	s.Attrs().Range(func(a attr.Attr) bool {
-		b.appendMessage(9, encodeKeyValueProto(a.Key, a.Value))
+		b.appendKV(9, a.Key, a.Value)
 		return true
 	})
 
-	// events (repeated Event, field 11)
 	for _, e := range s.Events() {
-		var ev protoBuf
-		ev.appendFixed64(1, uint64(e.Time.UnixNano()))
-		ev.appendString(2, e.Name)
+		off := b.beginMsg(11)
+		b.appendFixed64(1, uint64(e.Time.UnixNano()))
+		b.appendString(2, e.Name)
 		e.Attrs.Range(func(a attr.Attr) bool {
-			ev.appendMessage(3, encodeKeyValueProto(a.Key, a.Value))
+			b.appendKV(3, a.Key, a.Value)
 			return true
 		})
-		b.appendMessage(11, ev.data)
+		b.endMsg(off)
 	}
 
-	// status (message, field 15)
 	status, msg := s.Status()
 	if status != trace.StatusUnset {
-		var st protoBuf
+		off := b.beginMsg(15)
 		if msg != "" {
-			st.appendString(2, msg)
+			b.appendString(2, msg)
 		}
-		st.appendVarintField(3, uint64(statusToOTLPProto(status)))
-		b.appendMessage(15, st.data)
+		b.appendVarintField(3, uint64(statusToOTLPProto(status)))
+		b.endMsg(off)
 	}
-
-	return b.data
 }
 
-func encodeKeyValueProto(key string, value attr.Value) []byte {
-	var b protoBuf
+// appendKV writes a KeyValue message at fieldNumber.
+func (b *protoBuf) appendKV(fieldNumber int, key string, value attr.Value) {
+	off := b.beginMsg(fieldNumber)
 	b.appendString(1, key)
-	b.appendMessage(2, encodeAnyValue(value))
-	return b.data
+	b.appendAV(2, value)
+	b.endMsg(off)
 }
 
-func encodeAnyValue(v attr.Value) []byte {
-	var b protoBuf
+// appendAV writes an AnyValue message at fieldNumber.
+func (b *protoBuf) appendAV(fieldNumber int, v attr.Value) {
+	off := b.beginMsg(fieldNumber)
 	switch v.Kind() {
 	case attr.KindString:
 		b.appendString(1, v.AsString())
 	case attr.KindBool:
-		val := uint64(0)
 		if v.AsBool() {
-			val = 1
+			b.appendVarintField(2, 1)
 		}
-		b.appendVarintField(2, val)
 	case attr.KindInt64:
 		b.appendVarintField(3, uint64(v.AsInt64()))
 	case attr.KindUint64:
@@ -155,10 +147,9 @@ func encodeAnyValue(v attr.Value) []byte {
 	case attr.KindDuration:
 		b.appendVarintField(3, uint64(v.AsDuration()))
 	default:
-		s := v.String()
-		b.appendString(1, s)
+		b.appendString(1, v.String())
 	}
-	return b.data
+	b.endMsg(off)
 }
 
 func spanKindToOTLPProto(kind trace.SpanKind) int {
@@ -189,10 +180,55 @@ func statusToOTLPProto(status trace.SpanStatus) int {
 	}
 }
 
-// protoBuf is a minimal protobuf binary encoder.
-// Wire types: 0=varint, 1=64-bit, 2=length-delimited, 5=32-bit.
+// protoBuf is a minimal protobuf binary encoder that writes all fields into a
+// single growing buffer. Nested messages use beginMsg/endMsg for backpatched
+// length varints, eliminating per-message buffer allocations.
+//
+// Wire types: 0=varint, 1=64-bit, 2=length-delimited.
 type protoBuf struct {
 	data []byte
+}
+
+// beginMsg writes a field tag (wire type 2) and reserves 5 bytes for the
+// message length varint. Returns the offset of the reserved bytes so that
+// endMsg can patch the actual length after the payload is written.
+//
+// Using a fixed 5-byte slot means we may need to shift the payload left when
+// endMsg computes the real length and fits it in fewer bytes. The memmove is
+// cheap (payload is typically <1 KB) and produces correct minimal encoding.
+func (b *protoBuf) beginMsg(fieldNumber int) int {
+	b.appendTag(fieldNumber, 2)
+	off := len(b.data)
+	b.data = append(b.data, 0, 0, 0, 0, 0) // 5-byte length placeholder
+	return off
+}
+
+// endMsg patches the 5-byte placeholder at off with the minimal varint for the
+// payload size, then shifts the payload left to close any unused placeholder bytes.
+func (b *protoBuf) endMsg(off int) {
+	size := len(b.data) - off - 5
+
+	// Count bytes required for minimal varint encoding
+	needed := 1
+	v := uint64(size)
+	for v >= 0x80 {
+		needed++
+		v >>= 7
+	}
+
+	// Write minimal varint into the first `needed` bytes of the placeholder
+	v = uint64(size)
+	for i := range needed - 1 {
+		b.data[off+i] = byte(v) | 0x80
+		v >>= 7
+	}
+	b.data[off+needed-1] = byte(v)
+
+	// Close the unused trailing placeholder bytes by shifting the payload left
+	if needed < 5 {
+		copy(b.data[off+needed:], b.data[off+5:])
+		b.data = b.data[:len(b.data)-(5-needed)]
+	}
 }
 
 // appendTag encodes a field tag (field number + wire type) as a varint.
@@ -224,9 +260,10 @@ func (b *protoBuf) appendFixed64(fieldNumber int, v uint64) {
 		return
 	}
 	b.appendTag(fieldNumber, 1)
-	var tmp [8]byte
-	binary.LittleEndian.PutUint64(tmp[:], v)
-	b.data = append(b.data, tmp[:]...)
+	b.data = append(b.data,
+		byte(v), byte(v>>8), byte(v>>16), byte(v>>24),
+		byte(v>>32), byte(v>>40), byte(v>>48), byte(v>>56),
+	)
 }
 
 // appendDouble encodes a double field (wire type 1): 8 bytes IEEE-754 little-endian.
@@ -255,13 +292,4 @@ func (b *protoBuf) appendString(fieldNumber int, s string) {
 	b.appendTag(fieldNumber, 2)
 	b.appendRawVarint(uint64(len(s)))
 	b.data = append(b.data, s...)
-}
-
-// appendMessage encodes an embedded message field (wire type 2) from pre-encoded bytes.
-// An empty message is NOT omitted (may be needed for required fields in proto2,
-// and for zero-value proto3 messages we still want to include).
-func (b *protoBuf) appendMessage(fieldNumber int, msg []byte) {
-	b.appendTag(fieldNumber, 2)
-	b.appendRawVarint(uint64(len(msg)))
-	b.data = append(b.data, msg...)
 }
