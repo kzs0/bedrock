@@ -115,6 +115,15 @@ func (bp *BatchProcessor) exportLocked() {
 	}()
 }
 
+// ExportSpans implements the trace.Exporter interface by enqueuing spans for
+// batched export. This avoids spawning a goroutine per span.
+func (bp *BatchProcessor) ExportSpans(_ context.Context, spans []*trace.Span) error {
+	for _, s := range spans {
+		bp.EnqueueSpan(s)
+	}
+	return nil
+}
+
 // Shutdown stops the processor and exports remaining spans.
 func (bp *BatchProcessor) Shutdown(ctx context.Context) error {
 	bp.mu.Lock()

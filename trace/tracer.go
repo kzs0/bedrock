@@ -53,6 +53,57 @@ type StartSpanOptions struct {
 	RemoteParent *SpanContext // Remote parent from W3C Trace Context headers
 }
 
+// StartSpan creates a new span without the functional-options overhead.
+// It is the preferred hot-path entry point used by the bedrock package itself.
+// parentSpan is the local parent (nil for root). remoteParent is the W3C remote
+// parent (nil if not present). attrs are the initial span attributes.
+func (t *Tracer) StartSpan(ctx context.Context, name string, parentSpan *Span, remoteParent *SpanContext, attrs []attr.Attr) (context.Context, *Span) {
+	var traceID internal.TraceID
+	var parentID internal.SpanID
+	var parentSampled bool
+	var tracestate string
+
+	if remoteParent != nil && remoteParent.IsValid() {
+		traceID = remoteParent.TraceID
+		parentID = remoteParent.SpanID
+		parentSampled = remoteParent.Sampled
+		tracestate = remoteParent.Tracestate
+	} else if parentSpan != nil {
+		traceID = parentSpan.traceID
+		parentID = parentSpan.spanID
+		parentSampled = true
+		tracestate = parentSpan.tracestate
+	} else {
+		traceID = internal.NewTraceID()
+	}
+
+	result := t.sampler.ShouldSample(traceID, name, parentSampled)
+	if result.Decision == SamplingDecisionDrop {
+		noopSpan := &Span{
+			name:      name,
+			traceID:   traceID,
+			spanID:    internal.NewSpanID(),
+			parentID:  parentID,
+			startTime: time.Now(),
+			ended:     true,
+		}
+		return ContextWithSpan(ctx, noopSpan), noopSpan
+	}
+
+	span := &Span{
+		name:       name,
+		traceID:    traceID,
+		spanID:     internal.NewSpanID(),
+		parentID:   parentID,
+		startTime:  time.Now(),
+		tracestate: tracestate,
+		tracer:     t,
+	}
+	// Attrs are deferred to Done() via SetAttrSet; no alloc at span creation.
+	_ = attrs
+	return ContextWithSpan(ctx, span), span
+}
+
 // Start creates a new span.
 func (t *Tracer) Start(ctx context.Context, name string, opts ...StartSpanOption) (context.Context, *Span) {
 	var options StartSpanOptions

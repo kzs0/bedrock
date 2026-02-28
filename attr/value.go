@@ -70,8 +70,10 @@ func DurationValue(d time.Duration) Value {
 }
 
 // TimeValue creates a Value from a time.Time.
+// The time is stored as Unix nanoseconds (UTC); sub-nanosecond precision
+// and original timezone are not preserved, which is fine for observability.
 func TimeValue(t time.Time) Value {
-	return Value{kind: KindTime, any: t}
+	return Value{kind: KindTime, num: uint64(t.UnixNano())}
 }
 
 // AnyValue creates a Value from any type.
@@ -146,12 +148,12 @@ func (v Value) AsDuration() time.Duration {
 	return time.Duration(v.num)
 }
 
-// AsTime returns the value as a time.Time. Panics if kind != KindTime.
+// AsTime returns the value as a time.Time (UTC). Panics if kind != KindTime.
 func (v Value) AsTime() time.Time {
 	if v.kind != KindTime {
 		panic("Value.AsTime: not a time")
 	}
-	return v.any.(time.Time)
+	return time.Unix(0, int64(v.num)).UTC()
 }
 
 // AsAny returns the underlying value as an any.
@@ -170,7 +172,7 @@ func (v Value) AsAny() any {
 	case KindDuration:
 		return time.Duration(v.num)
 	case KindTime:
-		return v.any.(time.Time)
+		return time.Unix(0, int64(v.num)).UTC()
 	default:
 		return v.any
 	}
@@ -195,7 +197,7 @@ func (v Value) String() string {
 	case KindDuration:
 		return time.Duration(v.num).String()
 	case KindTime:
-		return v.any.(time.Time).Format(time.RFC3339Nano)
+		return time.Unix(0, int64(v.num)).UTC().Format(time.RFC3339Nano)
 	default:
 		return fmt.Sprintf("%v", v.any)
 	}

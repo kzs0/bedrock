@@ -184,13 +184,9 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 
 	// Check for source config and merge attributes/labels if present
 	if source := sourceConfigFromContext(ctx); source != nil {
-		// Merge source attributes
-		sourceAttrs := make([]attr.Attr, 0)
-		source.attrs.Range(func(a attr.Attr) bool {
-			sourceAttrs = append(sourceAttrs, a)
-			return true
-		})
-		cfg.attrs = append(sourceAttrs, cfg.attrs...)
+		// Prepend source attrs directly from the existing slice — no copy needed
+		// when cfg.attrs is nil (append returns source slice as-is).
+		cfg.attrs = append(source.attrs.Attrs(), cfg.attrs...)
 
 		// Use source metric labels if operation doesn't define any
 		if len(cfg.metricLabels) == 0 {
@@ -211,23 +207,14 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 		// Skip tracing, just pass through context with no-trace flag
 		newCtx = withNoTrace(ctx)
 	} else {
-		// Start trace span
-		var parentCtx context.Context
-		if parent != nil && parent.span != nil {
-			parentCtx = trace.ContextWithSpan(ctx, parent.span)
-		} else {
-			parentCtx = ctx
+		// Resolve local parent span (passed explicitly to avoid a context read).
+		var parentSpan *trace.Span
+		if parent != nil {
+			parentSpan = parent.span
 		}
-
-		// Build span options
-		spanOpts := []trace.StartSpanOption{trace.WithAttrs(cfg.attrs...)}
-
-		// Add remote parent if provided (from W3C Trace Context)
-		if cfg.remoteParent != nil && cfg.remoteParent.IsValid() {
-			spanOpts = append(spanOpts, trace.WithRemoteParent(*cfg.remoteParent))
-		}
-
-		newCtx, span = b.tracer.Start(parentCtx, cfg.name, spanOpts...)
+		// StartSpan avoids closure allocations: parent and remote parent are
+		// direct parameters; attrs are synced to span at Done() via SetAttrSet.
+		newCtx, span = b.tracer.StartSpan(ctx, cfg.name, parentSpan, cfg.remoteParent, cfg.attrs)
 	}
 
 	// Create operation state
@@ -292,20 +279,37 @@ func Step(ctx context.Context, name string, opts ...StepOption) *OpStep {
 //	    attr.Error(err),  // marks as failure if err != nil
 //	)
 func (op *Op) Register(ctx context.Context, items ...attr.Registrable) {
-	attrs := make([]attr.Attr, 0)
+	if op.state == nil {
+		return
+	}
+	// Stack buffer covers the common case of ≤8 attrs with zero allocation.
+	var buf [8]attr.Attr
+	attrs := buf[:0]
+	var overflow []attr.Attr
 
 	for _, item := range items {
 		switch v := item.(type) {
 		case attr.Attr:
-			attrs = append(attrs, v)
+			if len(attrs) < len(buf) {
+				attrs = attrs[:len(attrs)+1]
+				attrs[len(attrs)-1] = v
+			} else {
+				if overflow == nil {
+					overflow = make([]attr.Attr, len(attrs), len(items))
+					copy(overflow, attrs)
+				}
+				overflow = append(overflow, v)
+			}
 		case attr.Event:
-			// Register as trace event
 			if op.state.span != nil {
 				op.state.span.AddEvent(v.Name, v.Attrs...)
 			}
 		}
 	}
 
+	if overflow != nil {
+		attrs = overflow
+	}
 	if len(attrs) > 0 {
 		op.state.setAttr(attrs...)
 	}
@@ -410,10 +414,7 @@ func WithLogLevel(level string) InitOption {
 }
 
 func applyInitOptions(opts []InitOption) initConfig {
-	cfg := initConfig{
-		config:      nil,
-		staticAttrs: make([]attr.Attr, 0),
-	}
+	var cfg initConfig
 	for _, opt := range opts {
 		opt(&cfg)
 	}

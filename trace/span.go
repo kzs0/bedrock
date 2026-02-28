@@ -127,6 +127,19 @@ func (s *Span) SetAttr(attrs ...attr.Attr) {
 	s.attrs = s.attrs.Merge(attrs...)
 }
 
+// SetAttrSet replaces the span's attribute set wholesale.
+// Used at operation end to sync the final accumulated attrs in one shot,
+// avoiding repeated Merge calls during the operation lifetime.
+func (s *Span) SetAttrSet(set attr.Set) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.ended {
+		return
+	}
+	s.attrs = set
+}
+
 // AddEvent adds an event to the span.
 func (s *Span) AddEvent(name string, attrs ...attr.Attr) {
 	s.mu.Lock()

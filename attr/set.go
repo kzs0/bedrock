@@ -77,10 +77,24 @@ func (s Set) Merge(other ...Attr) Set {
 		return NewSet(other...)
 	}
 
+	// Allocate once: combine, sort, and dedup in-place on the same backing array.
 	combined := make([]Attr, 0, len(s.attrs)+len(other))
 	combined = append(combined, s.attrs...)
 	combined = append(combined, other...)
-	return NewSet(combined...)
+
+	sort.Slice(combined, func(i, j int) bool {
+		return combined[i].Key < combined[j].Key
+	})
+
+	deduped := combined[:0]
+	for i, a := range combined {
+		if i > 0 && combined[i-1].Key == a.Key {
+			deduped[len(deduped)-1] = a
+		} else {
+			deduped = append(deduped, a)
+		}
+	}
+	return Set{attrs: deduped}
 }
 
 // MergeSet creates a new Set by merging this set with another set.
@@ -93,10 +107,24 @@ func (s Set) MergeSet(other Set) Set {
 		return other
 	}
 
+	// Allocate once: combine, sort, and dedup in-place.
 	combined := make([]Attr, 0, len(s.attrs)+len(other.attrs))
 	combined = append(combined, s.attrs...)
 	combined = append(combined, other.attrs...)
-	return NewSet(combined...)
+
+	sort.Slice(combined, func(i, j int) bool {
+		return combined[i].Key < combined[j].Key
+	})
+
+	deduped := combined[:0]
+	for i, a := range combined {
+		if i > 0 && combined[i-1].Key == a.Key {
+			deduped[len(deduped)-1] = a
+		} else {
+			deduped = append(deduped, a)
+		}
+	}
+	return Set{attrs: deduped}
 }
 
 // Range iterates over all attributes in the set.

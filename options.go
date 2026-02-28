@@ -53,13 +53,37 @@ func NoTrace() commonOption {
 	return commonOption{applyNoTrace: true}
 }
 
+// opOptionKind tags which field of operationOnlyOption is populated.
+type opOptionKind uint8
+
+const (
+	opOptMetricLabels opOptionKind = iota + 1
+	opOptSuccess
+	opOptFailure
+	opOptRemoteParent
+)
+
 // operationOnlyOption is an option that only works on operations.
+// It uses a discriminated struct instead of a closure to avoid heap allocation.
 type operationOnlyOption struct {
-	fn func(*operationConfig)
+	kind         opOptionKind
+	labelNames   []string
+	err          error
+	remoteParent trace.SpanContext
 }
 
 func (o operationOnlyOption) applyToOperation(c *operationConfig) {
-	o.fn(c)
+	switch o.kind {
+	case opOptMetricLabels:
+		c.metricLabels = append(c.metricLabels, o.labelNames...)
+	case opOptSuccess:
+		c.success = true
+	case opOptFailure:
+		c.success = false
+		c.failure = o.err
+	case opOptRemoteParent:
+		c.remoteParent = &o.remoteParent
+	}
 }
 
 // operationConfig holds configuration for an operation.
@@ -77,31 +101,22 @@ type operationConfig struct {
 // If a label is defined but no attribute with that key is set, the value will be "_".
 // This prevents unlimited cardinality by pre-defining all possible label dimensions.
 func MetricLabels(labelNames ...string) operationOnlyOption {
-	return operationOnlyOption{fn: func(cfg *operationConfig) {
-		cfg.metricLabels = append(cfg.metricLabels, labelNames...)
-	}}
+	return operationOnlyOption{kind: opOptMetricLabels, labelNames: labelNames}
 }
 
 // Success marks the operation as successful (affects auto-generated success/failure metrics).
 func Success() operationOnlyOption {
-	return operationOnlyOption{fn: func(cfg *operationConfig) {
-		cfg.success = true
-	}}
+	return operationOnlyOption{kind: opOptSuccess}
 }
 
 // Failure marks the operation as failed with an error.
 func Failure(err error) operationOnlyOption {
-	return operationOnlyOption{fn: func(cfg *operationConfig) {
-		cfg.success = false
-		cfg.failure = err
-	}}
+	return operationOnlyOption{kind: opOptFailure, err: err}
 }
 
 // WithRemoteParent sets the remote parent from W3C Trace Context headers.
 func WithRemoteParent(parent trace.SpanContext) operationOnlyOption {
-	return operationOnlyOption{fn: func(cfg *operationConfig) {
-		cfg.remoteParent = &parent
-	}}
+	return operationOnlyOption{kind: opOptRemoteParent, remoteParent: parent}
 }
 
 // EndOption configures how an operation ends.
@@ -133,12 +148,7 @@ func EndFailure(err error) EndOption {
 
 // applyOperationOptions applies options to create an operation config.
 func applyOperationOptions(name string, opts []OperationOption) operationConfig {
-	cfg := operationConfig{
-		name:         name,
-		attrs:        make([]attr.Attr, 0),
-		metricLabels: make([]string, 0),
-		success:      false,
-	}
+	cfg := operationConfig{name: name}
 	for _, opt := range opts {
 		opt.applyToOperation(&cfg)
 	}
@@ -173,11 +183,7 @@ func SourceMetricLabels(labelNames ...string) SourceOption {
 
 // applySourceOptions applies options to create a source config.
 func applySourceOptions(name string, opts []SourceOption) sourceConfig {
-	cfg := sourceConfig{
-		name:         name,
-		attrs:        attr.NewSet(),
-		metricLabels: make([]string, 0),
-	}
+	cfg := sourceConfig{name: name}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -192,9 +198,7 @@ type stepConfig struct {
 
 // applyStepOptions applies options to create a step config.
 func applyStepOptions(opts []StepOption) stepConfig {
-	cfg := stepConfig{
-		attrs: make([]attr.Attr, 0),
-	}
+	var cfg stepConfig
 	for _, opt := range opts {
 		opt.applyToStep(&cfg)
 	}
