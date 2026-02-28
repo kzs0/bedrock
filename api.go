@@ -266,53 +266,33 @@ func Step(ctx context.Context, name string, opts ...StepOption) *OpStep {
 	return StepFromContext(ctx, name, opts...)
 }
 
-// Register adds attributes or events to the operation.
+// Register adds attributes to the operation.
 // Attributes can be used for metrics if they match registered metric label names.
-// Events are recorded in traces.
 // Use attr.Error(err) to register errors and mark the operation as failed.
 //
 // Usage:
 //
 //	op.Register(ctx,
 //	    attr.String("user_id", "123"),
-//	    attr.NewEvent("cache.hit", attr.String("key", "user:123")),
 //	    attr.Error(err),  // marks as failure if err != nil
 //	)
-func (op *Op) Register(ctx context.Context, items ...attr.Registrable) {
-	if op.state == nil {
+func (op *Op) Register(ctx context.Context, attrs ...attr.Attr) {
+	if op.state == nil || len(attrs) == 0 {
 		return
 	}
-	// Stack buffer covers the common case of ≤8 attrs with zero allocation.
-	var buf [8]attr.Attr
-	attrs := buf[:0]
-	var overflow []attr.Attr
+	op.state.setAttr(attrs...)
+}
 
-	for _, item := range items {
-		switch v := item.(type) {
-		case attr.Attr:
-			if len(attrs) < len(buf) {
-				attrs = attrs[:len(attrs)+1]
-				attrs[len(attrs)-1] = v
-			} else {
-				if overflow == nil {
-					overflow = make([]attr.Attr, len(attrs), len(items))
-					copy(overflow, attrs)
-				}
-				overflow = append(overflow, v)
-			}
-		case attr.Event:
-			if op.state.span != nil {
-				op.state.span.AddEvent(v.Name, v.Attrs...)
-			}
-		}
+// Event records a trace event on the operation span.
+//
+// Usage:
+//
+//	op.Event(ctx, attr.NewEvent("cache.hit", attr.String("key", "user:123")))
+func (op *Op) Event(ctx context.Context, event attr.Event) {
+	if op.state == nil || op.state.span == nil {
+		return
 	}
-
-	if overflow != nil {
-		attrs = overflow
-	}
-	if len(attrs) > 0 {
-		op.state.setAttr(attrs...)
-	}
+	op.state.span.AddEvent(event.Name, event.Attrs...)
 }
 
 // Done completes the operation and records all automatic metrics.

@@ -266,47 +266,28 @@ func StepFromContext(ctx context.Context, name string, opts ...StepOption) *OpSt
 	return step
 }
 
-// Register adds attributes or events to the step.
+// Register adds attributes to the step.
 // Attributes remain on the step but can be used as metric label values for the parent operation.
-// Events are recorded in traces.
 //
 // Usage:
 //
 //	step.Register(ctx,
 //	    attr.String("rows", "42"),
-//	    attr.NewEvent("query.complete"),
 //	)
-func (s *OpStep) Register(ctx context.Context, items ...attr.Registrable) {
-	// Stack buffer covers the common case of ≤8 attrs with zero allocation.
-	var buf [8]attr.Attr
-	attrs := buf[:0]
-	var overflow []attr.Attr
-
-	for _, item := range items {
-		switch v := item.(type) {
-		case attr.Attr:
-			if len(attrs) < len(buf) {
-				attrs = attrs[:len(attrs)+1]
-				attrs[len(attrs)-1] = v
-			} else {
-				if overflow == nil {
-					overflow = make([]attr.Attr, len(attrs), len(items))
-					copy(overflow, attrs)
-				}
-				overflow = append(overflow, v)
-			}
-		case attr.Event:
-			if s.span != nil {
-				s.span.AddEvent(v.Name, v.Attrs...)
-			}
-		}
-	}
-
-	if overflow != nil {
-		attrs = overflow
-	}
+func (s *OpStep) Register(ctx context.Context, attrs ...attr.Attr) {
 	if len(attrs) > 0 {
 		s.attrs = s.attrs.Merge(attrs...)
+	}
+}
+
+// Event records a trace event on the step span.
+//
+// Usage:
+//
+//	step.Event(ctx, attr.NewEvent("query.complete"))
+func (s *OpStep) Event(ctx context.Context, event attr.Event) {
+	if s.span != nil {
+		s.span.AddEvent(event.Name, event.Attrs...)
 	}
 }
 
