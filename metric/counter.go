@@ -24,17 +24,31 @@ type counterValue struct {
 
 // With returns a CounterVec with the given label values.
 func (c *Counter) With(labels ...attr.Attr) *CounterVec {
-	labels_verified := make([]attr.Attr, 0, len(labels))
+	var buf [8]attr.Attr
+	verified := buf[:0]
+	var overflow []attr.Attr
 	for _, label := range labels {
 		sanitized := sanitizeName(label.Key)
 		if _, ok := c.labelNames[sanitized]; !ok {
 			continue
 		}
 		label = label.WithKey(sanitized)
-		labels_verified = append(labels_verified, label)
+		if len(verified) < len(buf) {
+			verified = verified[:len(verified)+1]
+			verified[len(verified)-1] = label
+		} else {
+			if overflow == nil {
+				overflow = make([]attr.Attr, len(verified), len(labels))
+				copy(overflow, verified)
+			}
+			overflow = append(overflow, label)
+		}
+	}
+	if overflow != nil {
+		verified = overflow
 	}
 
-	key := labelsKey(labels_verified)
+	key := labelsKey(verified)
 
 	c.mu.RLock()
 	cv, ok := c.values[key]
@@ -53,7 +67,7 @@ func (c *Counter) With(labels ...attr.Attr) *CounterVec {
 	}
 
 	cv = &counterValue{
-		labels: attr.NewSet(labels_verified...),
+		labels: attr.NewSet(verified...),
 	}
 	c.values[key] = cv
 	return &CounterVec{value: cv}
@@ -110,21 +124,26 @@ func (cv *CounterVec) Add(v float64) {
 }
 
 // labelsKey creates a unique key from label values.
+// Sorts in-place using insertion sort (no alloc; labels slice is caller-local).
 func labelsKey(labels []attr.Attr) string {
 	if len(labels) == 0 {
 		return ""
 	}
-	set := attr.NewSet(labels...)
+	// Insertion sort for canonical key ordering — avoids closure alloc of sort.Slice.
+	for i := 1; i < len(labels); i++ {
+		for j := i; j > 0 && labels[j-1].Key > labels[j].Key; j-- {
+			labels[j-1], labels[j] = labels[j], labels[j-1]
+		}
+	}
 	var sb strings.Builder
-	set.Range(func(a attr.Attr) bool {
-		if sb.Len() > 0 {
+	for i, a := range labels {
+		if i > 0 {
 			sb.WriteByte('|')
 		}
 		sb.WriteString(a.Key)
 		sb.WriteByte('=')
 		sb.WriteString(a.Value.String())
-		return true
-	})
+	}
 	return sb.String()
 }
 

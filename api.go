@@ -235,7 +235,7 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 //	source, ctx := bedrock.Source(ctx, "background.worker")
 //	defer source.Done()
 //
-//	source.Aggregate(ctx, attr.Sum("loops", 1))
+//	source.Sum(ctx, "loops", 1)
 func Source(ctx context.Context, name string, opts ...SourceOption) (*Src, context.Context) {
 	cfg := applySourceOptions(name, opts)
 	ctx = withSourceConfig(ctx, &cfg)
@@ -303,51 +303,43 @@ func (op *Op) Done() {
 	op.state.end()
 }
 
-// Aggregate records aggregated metrics for the source.
-// Sources typically track aggregates since they don't "complete" like operations.
-// Accepts Sum, Gauge, and Histogram aggregations.
+// Sum increments a named counter for the source by the given value.
 //
 // Usage:
 //
-//	source.Aggregate(ctx,
-//	    attr.Sum("requests", 1),
-//	    attr.Gauge("queue_depth", 42),
-//	    attr.Histogram("latency_ms", 123.45),
-//	)
-func (src *Src) Aggregate(ctx context.Context, items ...attr.Aggregation) {
+//	source.Sum(ctx, "jobs_processed", 1)
+func (src *Src) Sum(ctx context.Context, key string, value float64) {
 	if src.bedrock.isNoop {
 		return
 	}
+	counter := Counter(ctx, src.name+"_"+key, "Aggregated "+key+" for "+src.name)
+	counter.Add(value)
+}
 
-	for _, item := range items {
-		switch v := item.(type) {
-		case attr.SumAttr:
-			// Record as counter
-			counter := Counter(
-				ctx,
-				src.name+"_"+v.Key,
-				"Aggregated "+v.Key+" for "+src.name,
-			)
-			counter.Add(v.Value)
-		case attr.GaugeAttr:
-			// Record as gauge
-			gauge := Gauge(
-				ctx,
-				src.name+"_"+v.Key,
-				"Aggregated "+v.Key+" for "+src.name,
-			)
-			gauge.Set(v.Value)
-		case attr.HistogramAttr:
-			// Record as histogram
-			histogram := Histogram(
-				ctx,
-				src.name+"_"+v.Key,
-				"Aggregated "+v.Key+" for "+src.name,
-				nil, // use default buckets
-			)
-			histogram.Observe(v.Value)
-		}
+// Gauge sets a named gauge for the source to the given value.
+//
+// Usage:
+//
+//	source.Gauge(ctx, "queue_depth", 42)
+func (src *Src) Gauge(ctx context.Context, key string, value float64) {
+	if src.bedrock.isNoop {
+		return
 	}
+	gauge := Gauge(ctx, src.name+"_"+key, "Aggregated "+key+" for "+src.name)
+	gauge.Set(value)
+}
+
+// Histogram records a named histogram observation for the source.
+//
+// Usage:
+//
+//	source.Histogram(ctx, "latency_ms", 123.45)
+func (src *Src) Histogram(ctx context.Context, key string, value float64) {
+	if src.bedrock.isNoop {
+		return
+	}
+	histogram := Histogram(ctx, src.name+"_"+key, "Aggregated "+key+" for "+src.name, nil)
+	histogram.Observe(value)
 }
 
 // Done is a no-op for sources (they don't complete).
@@ -412,27 +404,10 @@ func applyInitOptions(opts []InitOption) initConfig {
 //	counter.Inc() // automatically includes static labels
 func Counter(ctx context.Context, name, help string, labelNames ...string) *CounterWithStatic {
 	b := bedrockFromContext(ctx)
-
-	// Include static label names
-	staticLabelNames := make([]string, 0, b.staticAttr.Len())
-	b.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabelNames = append(staticLabelNames, a.Key)
-		return true
-	})
-
-	// Get static label values
-	staticLabels := make([]attr.Attr, 0, b.staticAttr.Len())
-	b.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabels = append(staticLabels, a)
-		return true
-	})
-
-	allLabelNames := append(staticLabelNames, labelNames...)
-	counter := b.metrics.Counter(name, help, allLabelNames...)
-
+	allLabelNames := append(b.staticLabelKeys, labelNames...)
 	return &CounterWithStatic{
-		counter:      counter,
-		staticLabels: staticLabels,
+		counter:      b.metrics.Counter(name, help, allLabelNames...),
+		staticLabels: b.staticLabelVals,
 	}
 }
 
@@ -445,27 +420,10 @@ func Counter(ctx context.Context, name, help string, labelNames ...string) *Coun
 //	gauge.Set(42) // automatically includes static labels
 func Gauge(ctx context.Context, name, help string, labelNames ...string) *GaugeWithStatic {
 	b := bedrockFromContext(ctx)
-
-	// Include static label names
-	staticLabelNames := make([]string, 0, b.staticAttr.Len())
-	b.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabelNames = append(staticLabelNames, a.Key)
-		return true
-	})
-
-	// Get static label values
-	staticLabels := make([]attr.Attr, 0, b.staticAttr.Len())
-	b.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabels = append(staticLabels, a)
-		return true
-	})
-
-	allLabelNames := append(staticLabelNames, labelNames...)
-	gauge := b.metrics.Gauge(name, help, allLabelNames...)
-
+	allLabelNames := append(b.staticLabelKeys, labelNames...)
 	return &GaugeWithStatic{
-		gauge:        gauge,
-		staticLabels: staticLabels,
+		gauge:        b.metrics.Gauge(name, help, allLabelNames...),
+		staticLabels: b.staticLabelVals,
 	}
 }
 
@@ -481,27 +439,10 @@ func Gauge(ctx context.Context, name, help string, labelNames ...string) *GaugeW
 //	hist.Observe(123.45) // automatically includes static labels
 func Histogram(ctx context.Context, name, help string, buckets []float64, labelNames ...string) *HistogramWithStatic {
 	b := bedrockFromContext(ctx)
-
-	// Include static label names
-	staticLabelNames := make([]string, 0, b.staticAttr.Len())
-	b.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabelNames = append(staticLabelNames, a.Key)
-		return true
-	})
-
-	// Get static label values
-	staticLabels := make([]attr.Attr, 0, b.staticAttr.Len())
-	b.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabels = append(staticLabels, a)
-		return true
-	})
-
-	allLabelNames := append(staticLabelNames, labelNames...)
-	histogram := b.metrics.Histogram(name, help, buckets, allLabelNames...)
-
+	allLabelNames := append(b.staticLabelKeys, labelNames...)
 	return &HistogramWithStatic{
-		histogram:    histogram,
-		staticLabels: staticLabels,
+		histogram:    b.metrics.Histogram(name, help, buckets, allLabelNames...),
+		staticLabels: b.staticLabelVals,
 	}
 }
 

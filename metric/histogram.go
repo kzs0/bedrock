@@ -27,17 +27,31 @@ type histogramValue struct {
 
 // With returns a HistogramVec with the given label values.
 func (h *Histogram) With(labels ...attr.Attr) *HistogramVec {
-	labels_verified := make([]attr.Attr, 0, len(labels))
+	var buf [8]attr.Attr
+	verified := buf[:0]
+	var overflow []attr.Attr
 	for _, label := range labels {
 		sanitized := sanitizeName(label.Key)
 		if _, ok := h.labelNames[sanitized]; !ok {
 			continue
 		}
 		label = label.WithKey(sanitized)
-		labels_verified = append(labels_verified, label)
+		if len(verified) < len(buf) {
+			verified = verified[:len(verified)+1]
+			verified[len(verified)-1] = label
+		} else {
+			if overflow == nil {
+				overflow = make([]attr.Attr, len(verified), len(labels))
+				copy(overflow, verified)
+			}
+			overflow = append(overflow, label)
+		}
+	}
+	if overflow != nil {
+		verified = overflow
 	}
 
-	key := labelsKey(labels_verified)
+	key := labelsKey(verified)
 
 	h.mu.RLock()
 	hv, ok := h.values[key]
@@ -56,7 +70,7 @@ func (h *Histogram) With(labels ...attr.Attr) *HistogramVec {
 	}
 
 	hv = &histogramValue{
-		labels:      attr.NewSet(labels_verified...),
+		labels:      attr.NewSet(verified...),
 		bucketCount: make([]atomic.Uint64, len(h.buckets)),
 	}
 	h.values[key] = hv

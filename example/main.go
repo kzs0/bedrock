@@ -152,7 +152,7 @@ func loop(ctx context.Context, term time.Duration) error {
 
 	for {
 		// Sources often work on aggregates since they never "resolve"
-		source.Aggregate(ctx, attr.Sum("loops", 1))
+		source.Sum(ctx, "loops", 1)
 
 		select {
 		case <-ctx.Done():
