@@ -153,6 +153,10 @@ func (op *operationState) recordMetrics() {
 
 // end finishes the operation.
 func (op *operationState) end() {
+	// Capture duration before any other work so the logged value matches
+	// the actual operation wall time rather than including log/metric overhead.
+	duration := time.Since(op.startTime)
+
 	// Sync accumulated attrs to span in one shot before ending, to avoid
 	// a Merge allocation on every Register call during the operation lifetime.
 	if op.span != nil {
@@ -168,16 +172,14 @@ func (op *operationState) end() {
 
 	// Canonical log if enabled
 	if op.bedrock.config.LogCanonical && !op.bedrock.isNoop {
-		op.logCanonical()
+		op.logCanonical(duration)
 	}
 }
 
 // logCanonical writes a structured log of the complete operation.
-func (op *operationState) logCanonical() {
+func (op *operationState) logCanonical(duration time.Duration) {
 	op.mu.Lock()
 	defer op.mu.Unlock()
-
-	duration := time.Since(op.startTime)
 
 	// Collect attributes
 	attrs := make(map[string]any)

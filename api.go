@@ -342,9 +342,16 @@ func (src *Src) Histogram(ctx context.Context, key string, value float64) {
 	histogram.Observe(value)
 }
 
-// Done is a no-op for sources (they don't complete).
+// Done signals the source is stopping.
+// When LogCanonical is enabled it emits a structured completion log.
 func (src *Src) Done() {
-	// Sources don't complete, this is just for API consistency
+	if src.bedrock.isNoop || !src.bedrock.config.LogCanonical {
+		return
+	}
+	src.bedrock.logger.Info("source.complete",
+		"source", src.name,
+		"success", true,
+	)
 }
 
 // InitOption configures initialization.

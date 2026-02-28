@@ -14,6 +14,15 @@ type Exporter interface {
 	Shutdown(ctx context.Context) error
 }
 
+// SpanEnqueuer is an optional fast-path interface for Exporter implementations
+// that batch spans internally (e.g. BatchProcessor).
+// When the tracer's exporter implements SpanEnqueuer, span.End() calls
+// EnqueueSpan directly instead of spawning a goroutine per span, eliminating
+// one goroutine allocation per span on the hot path.
+type SpanEnqueuer interface {
+	EnqueueSpan(*Span)
+}
+
 // Tracer creates spans and manages trace context.
 type Tracer struct {
 	serviceName string
@@ -173,7 +182,13 @@ func (t *Tracer) export(span *Span) {
 	if t.exporter == nil {
 		return
 	}
-	// Export asynchronously to not block the caller
+	// Fast path: if the exporter supports direct enqueue (e.g. BatchProcessor),
+	// call it synchronously — no goroutine needed since EnqueueSpan is O(1).
+	if eq, ok := t.exporter.(SpanEnqueuer); ok {
+		eq.EnqueueSpan(span)
+		return
+	}
+	// Slow path: export asynchronously to avoid blocking span.End() callers.
 	go func() {
 		_ = t.exporter.ExportSpans(context.Background(), []*Span{span})
 	}()

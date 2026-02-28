@@ -39,7 +39,9 @@ type Bedrock struct {
 	// Per-operation-name metric cache: avoids string allocs and map lookups on Done().
 	opMetricsCache sync.Map // map[string]*cachedOpMetrics
 
-	exporter         *otlp.Exporter
+	// rawExporter is the underlying span exporter (HTTP or gRPC). It may be nil.
+	// batchProcessor wraps rawExporter and is what the tracer actually calls.
+	rawExporter      trace.Exporter
 	batchProcessor   *otlp.BatchProcessor
 	runtimeCollector *metric.RuntimeCollector
 
@@ -110,12 +112,22 @@ func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 	// Setup tracing
 	var exporter trace.Exporter
 	if cfg.TraceURL != "" {
-		b.exporter = otlp.NewExporter(otlp.ExporterConfig{
-			Endpoint:    cfg.TraceURL,
-			ServiceName: cfg.Service,
-			Resource:    b.staticAttr,
-		})
-		b.batchProcessor = otlp.NewBatchProcessor(b.exporter, otlp.DefaultBatchConfig())
+		if useGRPC(cfg) {
+			b.rawExporter = otlp.NewGRPCExporter(otlp.GRPCExporterConfig{
+				Endpoint:    cfg.TraceURL,
+				Insecure:    cfg.TraceInsecure,
+				ServiceName: cfg.Service,
+				Resource:    b.staticAttr,
+				Timeout:     cfg.ShutdownTimeout,
+			})
+		} else {
+			b.rawExporter = otlp.NewExporter(otlp.ExporterConfig{
+				Endpoint:    cfg.TraceURL,
+				ServiceName: cfg.Service,
+				Resource:    b.staticAttr,
+			})
+		}
+		b.batchProcessor = otlp.NewBatchProcessor(b.rawExporter, otlp.DefaultBatchConfig())
 		// Wire the batch processor as the tracer exporter so that span.End()
 		// enqueues into the batch processor rather than spawning a goroutine per span.
 		exporter = b.batchProcessor
@@ -164,6 +176,11 @@ func (b *Bedrock) Metrics() *metric.Registry {
 	return b.metrics
 }
 
+// MetricsRegistry returns the metric registry (alias for Metrics).
+func (b *Bedrock) MetricsRegistry() *metric.Registry {
+	return b.metrics
+}
+
 // Tracer returns the tracer.
 func (b *Bedrock) Tracer() *trace.Tracer {
 	return b.tracer
@@ -206,6 +223,11 @@ func (b *Bedrock) getOpMetrics(name string, metricLabels []string) *cachedOpMetr
 func (b *Bedrock) Shutdown(ctx context.Context) error {
 	if b.batchProcessor != nil {
 		if err := b.batchProcessor.Shutdown(ctx); err != nil {
+			return err
+		}
+	}
+	if b.rawExporter != nil {
+		if err := b.rawExporter.Shutdown(ctx); err != nil {
 			return err
 		}
 	}

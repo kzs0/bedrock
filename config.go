@@ -18,8 +18,25 @@ type Config struct {
 	Service string `env:"BEDROCK_SERVICE" envDefault:"unknown"`
 
 	// Tracing configuration
-	// TraceURL is the OTLP HTTP endpoint for traces.
+	//
+	// TraceURL is the OTLP trace endpoint.
+	// Format depends on TraceProtocol:
+	//   gRPC → "host:port"          (e.g. "localhost:4317")
+	//   HTTP → full URL             (e.g. "http://localhost:4318/v1/traces")
+	//
+	// When TraceProtocol is empty the protocol is auto-detected:
+	//   • URL with scheme (http:// / https://) or containing "/" → HTTP/JSON
+	//   • Plain "host:port" without scheme/path                  → gRPC (default)
 	TraceURL string `env:"BEDROCK_TRACE_URL"`
+
+	// TraceProtocol selects the OTLP export protocol: "grpc" or "http".
+	// Leave empty to auto-detect from TraceURL (see above).
+	TraceProtocol string `env:"BEDROCK_TRACE_PROTOCOL"`
+
+	// TraceInsecure disables TLS for gRPC transport (h2c cleartext).
+	// Ignored for HTTP transport.
+	TraceInsecure bool `env:"BEDROCK_TRACE_INSECURE" envDefault:"false"`
+
 	// TraceSampleRate controls trace sampling (0.0 to 1.0).
 	TraceSampleRate float64 `env:"BEDROCK_TRACE_SAMPLE_RATE" envDefault:"1.0"`
 	// TraceSampler controls trace sampling (overrides TraceSampleRate if set).
@@ -109,6 +126,26 @@ func MustFromEnv() Config {
 		panic(err)
 	}
 	return cfg
+}
+
+// useGRPC reports whether the gRPC exporter should be used for cfg.
+//
+// Decision tree:
+//  1. If TraceProtocol is explicitly "http" → false
+//  2. If TraceProtocol is explicitly "grpc" → true
+//  3. Auto-detect from TraceURL:
+//     - contains "://" (has a scheme) or contains "/" (has a path) → HTTP
+//     - otherwise (bare "host:port")                               → gRPC
+func useGRPC(cfg Config) bool {
+	switch strings.ToLower(strings.TrimSpace(cfg.TraceProtocol)) {
+	case "http", "http/json", "http/protobuf":
+		return false
+	case "grpc", "grpc/proto":
+		return true
+	}
+	// Auto-detect
+	u := cfg.TraceURL
+	return !strings.Contains(u, "://") && !strings.Contains(u, "/")
 }
 
 // parseLogLevel converts a string log level to slog.Level.

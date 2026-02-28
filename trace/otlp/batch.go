@@ -30,7 +30,7 @@ func DefaultBatchConfig() BatchProcessorConfig {
 // BatchProcessor batches spans before sending to an exporter.
 type BatchProcessor struct {
 	cfg      BatchProcessorConfig
-	exporter *Exporter
+	exporter trace.Exporter
 
 	mu      sync.Mutex
 	queue   []*trace.Span
@@ -40,7 +40,7 @@ type BatchProcessor struct {
 }
 
 // NewBatchProcessor creates a new batch processor.
-func NewBatchProcessor(exporter *Exporter, cfg BatchProcessorConfig) *BatchProcessor {
+func NewBatchProcessor(exporter trace.Exporter, cfg BatchProcessorConfig) *BatchProcessor {
 	if cfg.MaxQueueSize <= 0 {
 		cfg.MaxQueueSize = 2048
 	}
