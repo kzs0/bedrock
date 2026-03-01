@@ -23,7 +23,7 @@ type counterValue struct {
 }
 
 // With returns a CounterVec with the given label values.
-func (c *Counter) With(labels ...attr.Attr) *CounterVec {
+func (c *Counter) With(labels ...attr.Attr) CounterVec {
 	var buf [8]attr.Attr
 	verified := buf[:0]
 	var overflow []attr.Attr
@@ -55,7 +55,7 @@ func (c *Counter) With(labels ...attr.Attr) *CounterVec {
 	c.mu.RUnlock()
 
 	if ok {
-		return &CounterVec{value: cv}
+		return CounterVec{value: cv}
 	}
 
 	c.mu.Lock()
@@ -63,14 +63,14 @@ func (c *Counter) With(labels ...attr.Attr) *CounterVec {
 
 	// Double-check after acquiring write lock
 	if cv, ok = c.values[key]; ok {
-		return &CounterVec{value: cv}
+		return CounterVec{value: cv}
 	}
 
 	cv = &counterValue{
 		labels: attr.NewSet(verified...),
 	}
 	c.values[key] = cv
-	return &CounterVec{value: cv}
+	return CounterVec{value: cv}
 }
 
 // Inc increments the counter by 1.
@@ -110,12 +110,12 @@ type CounterVec struct {
 }
 
 // Inc increments the counter by 1.
-func (cv *CounterVec) Inc() {
+func (cv CounterVec) Inc() {
 	cv.value.value.Add(1)
 }
 
 // Add adds the given value to the counter.
-func (cv *CounterVec) Add(v float64) {
+func (cv CounterVec) Add(v float64) {
 	if v < 0 {
 		return // Counters can only increase
 	}

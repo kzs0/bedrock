@@ -1,7 +1,8 @@
 package attr
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 )
 
 // Set is an immutable collection of attributes, sorted by key.
@@ -22,9 +23,7 @@ func NewSet(attrs ...Attr) Set {
 	copy(sorted, attrs)
 
 	// Sort by key
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Key < sorted[j].Key
-	})
+	slices.SortFunc(sorted, func(a, b Attr) int { return cmp.Compare(a.Key, b.Key) })
 
 	// Deduplicate (keep last value for each key)
 	deduped := sorted[:0]
@@ -52,10 +51,8 @@ func (s Set) Attrs() []Attr {
 
 // Get returns the value for the given key, or zero Value if not found.
 func (s Set) Get(key string) (Value, bool) {
-	i := sort.Search(len(s.attrs), func(i int) bool {
-		return s.attrs[i].Key >= key
-	})
-	if i < len(s.attrs) && s.attrs[i].Key == key {
+	i, ok := slices.BinarySearchFunc(s.attrs, key, func(a Attr, k string) int { return cmp.Compare(a.Key, k) })
+	if ok {
 		return s.attrs[i].Value, true
 	}
 	return Value{}, false
@@ -82,9 +79,7 @@ func (s Set) Merge(other ...Attr) Set {
 	combined = append(combined, s.attrs...)
 	combined = append(combined, other...)
 
-	sort.Slice(combined, func(i, j int) bool {
-		return combined[i].Key < combined[j].Key
-	})
+	slices.SortFunc(combined, func(a, b Attr) int { return cmp.Compare(a.Key, b.Key) })
 
 	deduped := combined[:0]
 	for i, a := range combined {
@@ -112,9 +107,7 @@ func (s Set) MergeSet(other Set) Set {
 	combined = append(combined, s.attrs...)
 	combined = append(combined, other.attrs...)
 
-	sort.Slice(combined, func(i, j int) bool {
-		return combined[i].Key < combined[j].Key
-	})
+	slices.SortFunc(combined, func(a, b Attr) int { return cmp.Compare(a.Key, b.Key) })
 
 	deduped := combined[:0]
 	for i, a := range combined {

@@ -23,7 +23,7 @@ type gaugeValue struct {
 }
 
 // With returns a GaugeVec with the given label values.
-func (g *Gauge) With(labels ...attr.Attr) *GaugeVec {
+func (g *Gauge) With(labels ...attr.Attr) GaugeVec {
 	var buf [8]attr.Attr
 	verified := buf[:0]
 	var overflow []attr.Attr
@@ -55,7 +55,7 @@ func (g *Gauge) With(labels ...attr.Attr) *GaugeVec {
 	g.mu.RUnlock()
 
 	if ok {
-		return &GaugeVec{value: gv}
+		return GaugeVec{value: gv}
 	}
 
 	g.mu.Lock()
@@ -63,14 +63,14 @@ func (g *Gauge) With(labels ...attr.Attr) *GaugeVec {
 
 	// Double-check after acquiring write lock
 	if gv, ok = g.values[key]; ok {
-		return &GaugeVec{value: gv}
+		return GaugeVec{value: gv}
 	}
 
 	gv = &gaugeValue{
 		labels: attr.NewSet(verified...),
 	}
 	g.values[key] = gv
-	return &GaugeVec{value: gv}
+	return GaugeVec{value: gv}
 }
 
 // Set sets the gauge to the given value.
@@ -125,22 +125,22 @@ type GaugeVec struct {
 }
 
 // Set sets the gauge to the given value.
-func (gv *GaugeVec) Set(v float64) {
+func (gv GaugeVec) Set(v float64) {
 	gv.value.bits.Store(math.Float64bits(v))
 }
 
 // Inc increments the gauge by 1.
-func (gv *GaugeVec) Inc() {
+func (gv GaugeVec) Inc() {
 	gv.Add(1)
 }
 
 // Dec decrements the gauge by 1.
-func (gv *GaugeVec) Dec() {
+func (gv GaugeVec) Dec() {
 	gv.Add(-1)
 }
 
 // Add adds the given value to the gauge.
-func (gv *GaugeVec) Add(delta float64) {
+func (gv GaugeVec) Add(delta float64) {
 	for {
 		oldBits := gv.value.bits.Load()
 		newVal := math.Float64frombits(oldBits) + delta
@@ -151,6 +151,6 @@ func (gv *GaugeVec) Add(delta float64) {
 }
 
 // Sub subtracts the given value from the gauge.
-func (gv *GaugeVec) Sub(delta float64) {
+func (gv GaugeVec) Sub(delta float64) {
 	gv.Add(-delta)
 }

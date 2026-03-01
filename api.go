@@ -30,7 +30,7 @@ type CounterWithStatic struct {
 }
 
 // With returns a CounterVec with the given label values plus static labels.
-func (c *CounterWithStatic) With(labels ...attr.Attr) *metric.CounterVec {
+func (c *CounterWithStatic) With(labels ...attr.Attr) metric.CounterVec {
 	allLabels := append(c.staticLabels, labels...)
 	return c.counter.With(allLabels...)
 }
@@ -52,7 +52,7 @@ type GaugeWithStatic struct {
 }
 
 // With returns a GaugeVec with the given label values plus static labels.
-func (g *GaugeWithStatic) With(labels ...attr.Attr) *metric.GaugeVec {
+func (g *GaugeWithStatic) With(labels ...attr.Attr) metric.GaugeVec {
 	allLabels := append(g.staticLabels, labels...)
 	return g.gauge.With(allLabels...)
 }
@@ -89,7 +89,7 @@ type HistogramWithStatic struct {
 }
 
 // With returns a HistogramVec with the given label values plus static labels.
-func (h *HistogramWithStatic) With(labels ...attr.Attr) *metric.HistogramVec {
+func (h *HistogramWithStatic) With(labels ...attr.Attr) metric.HistogramVec {
 	allLabels := append(h.staticLabels, labels...)
 	return h.histogram.With(allLabels...)
 }
