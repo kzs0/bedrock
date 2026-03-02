@@ -139,7 +139,7 @@ func (c *Client) Shutdown() {
 		}())
 		_ = c.conn.SetWriteDeadline(time.Now().Add(1 * time.Second))
 		_, _ = c.conn.Write(goaway)
-		c.conn.Close()
+		_ = c.conn.Close()
 		c.conn = nil
 	}
 }
@@ -171,11 +171,14 @@ func (c *Client) connect() error {
 		return fmt.Errorf("h2c: dial %s: %w", c.host, err)
 	}
 
-	conn.SetDeadline(time.Now().Add(c.timeout))
+	if err = conn.SetDeadline(time.Now().Add(c.timeout)); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("h2c: set deadline: %w", err)
+	}
 
 	// Send client connection preface
 	if _, err = io.WriteString(conn, clientPreface); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("h2c: write preface: %w", err)
 	}
 
@@ -187,7 +190,7 @@ func (c *Client) connect() error {
 	})
 	sf := buildFrame(frameTypeSettings, 0, 0, settingsPayload)
 	if _, err = conn.Write(sf); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("h2c: write SETTINGS: %w", err)
 	}
 
@@ -196,7 +199,7 @@ func (c *Client) connect() error {
 	for !gotServerSettings {
 		f, payload, rerr := readFrame(conn)
 		if rerr != nil {
-			conn.Close()
+			_ = conn.Close()
 			return fmt.Errorf("h2c: handshake read: %w", rerr)
 		}
 		switch f.typ {
@@ -211,7 +214,7 @@ func (c *Client) connect() error {
 			// Send ACK
 			ack := buildFrame(frameTypeSettings, flagAck, 0, nil)
 			if _, err = conn.Write(ack); err != nil {
-				conn.Close()
+				_ = conn.Close()
 				return fmt.Errorf("h2c: write SETTINGS ACK: %w", err)
 			}
 			gotServerSettings = true
@@ -223,12 +226,12 @@ func (c *Client) connect() error {
 			}
 
 		case frameTypeGoAway:
-			conn.Close()
+			_ = conn.Close()
 			return errors.New("h2c: server sent GOAWAY during handshake")
 		}
 	}
 
-	conn.SetDeadline(time.Time{}) // clear deadline; per-operation timeouts used
+	_ = conn.SetDeadline(time.Time{}) // clear deadline; per-operation timeouts used
 	c.conn = conn
 	c.connWin = defaultWindowSize
 	c.streamWin = defaultWindowSize
@@ -251,7 +254,7 @@ func (c *Client) applyServerSettings(payload []byte) {
 // Returns the concatenated DATA payload and the gRPC status code from trailers.
 func (c *Client) readResponse(streamID uint32) (body []byte, grpcStatus int, err error) {
 	_ = c.conn.SetDeadline(time.Now().Add(c.timeout))
-	defer c.conn.SetDeadline(time.Time{})
+	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 
 	for {
 		f, payload, rerr := readFrame(c.conn)
@@ -303,9 +306,10 @@ func (c *Client) readResponse(streamID uint32) (body []byte, grpcStatus int, err
 			if len(payload) == 4 {
 				inc = binary.BigEndian.Uint32(payload) & 0x7fffffff
 			}
-			if f.streamID == 0 {
+			switch f.streamID {
+			case 0:
 				c.connWin += int(inc)
-			} else if f.streamID == streamID {
+			case streamID:
 				c.streamWin += int(inc)
 			}
 
@@ -334,9 +338,10 @@ func (c *Client) drainOneFrame(streamID uint32) error {
 	}
 	if f.typ == frameTypeWindowUpdate && len(payload) == 4 {
 		inc := int(binary.BigEndian.Uint32(payload) & 0x7fffffff)
-		if f.streamID == 0 {
+		switch f.streamID {
+		case 0:
 			c.connWin += inc
-		} else if f.streamID == streamID {
+		case streamID:
 			c.streamWin += inc
 		}
 	}
@@ -353,7 +358,7 @@ func (c *Client) write(b []byte) error {
 // reset closes the current connection so the next call reconnects.
 func (c *Client) reset() {
 	if c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 		c.conn = nil
 	}
 	c.connWin = defaultWindowSize

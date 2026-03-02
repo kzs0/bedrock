@@ -58,9 +58,6 @@ const (
 // Default HTTP/2 flow control window size (RFC 7540 §6.9.2).
 const defaultWindowSize = 65535
 
-// Maximum HTTP/2 frame payload (RFC 7540 §4.2).
-const maxFrameSize = 16384 // 2^14, the minimum allowed maximum
-
 // frame represents a parsed HTTP/2 frame header.
 type frame struct {
 	length   uint32
