@@ -122,7 +122,12 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 		cfg.config = &envCfg
 	}
 
-	b, err := New(*cfg.config, cfg.staticAttrs...)
+	// Auto-detect environment attributes. User-supplied WithStaticAttrs values
+	// take precedence because they are appended last (attr.NewSet last-wins).
+	detected := detectEnvironment()
+	allStatic := append(detected, cfg.staticAttrs...)
+
+	b, err := New(*cfg.config, allStatic...)
 	if err != nil {
 		panic(fmt.Errorf("bedrock: failed to initialize: %w", err))
 	}
