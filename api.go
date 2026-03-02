@@ -122,12 +122,25 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 		cfg.config = &envCfg
 	}
 
-	b, err := New(*cfg.config, cfg.staticAttrs...)
+	// Auto-detect environment attributes. User-supplied WithStaticAttrs values
+	// take precedence because they are appended last (attr.NewSet last-wins).
+	detected := detectEnvironment()
+	allStatic := append(detected, cfg.staticAttrs...)
+
+	b, err := New(*cfg.config, allStatic...)
 	if err != nil {
 		panic(fmt.Errorf("bedrock: failed to initialize: %w", err))
 	}
 
 	ctx = WithBedrock(ctx, b)
+
+	// Wire cloud backend if configured. This must happen after New() so we can
+	// fan-out with the local exporter (if any).
+	var cloudShutdown func(context.Context)
+	if cfg.cloudCfg != nil {
+		cloudShutdown = wireCloud(b, cfg.cloudCfg, b.logger)
+		b.logger.Info("bedrock cloud backend connected", slog.String("endpoint", cfg.cloudCfg.endpoint))
+	}
 
 	// Automatically create and start obs server if enabled in config
 	var obsServer *server.Server
@@ -153,6 +166,11 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 			if err := obsServer.Shutdown(shutdownCtx); err != nil {
 				b.logger.Error("failed to shutdown observability server", slog.Any("error", err))
 			}
+		}
+
+		// Flush cloud workers (metrics push, profiling push) before trace flush.
+		if cloudShutdown != nil {
+			cloudShutdown(shutdownCtx)
 		}
 
 		if err := b.Shutdown(shutdownCtx); err != nil {
@@ -363,6 +381,7 @@ type InitOption func(*initConfig)
 type initConfig struct {
 	config      *Config
 	staticAttrs []attr.Attr
+	cloudCfg    *cloudConfig
 }
 
 // WithConfig provides an explicit configuration.

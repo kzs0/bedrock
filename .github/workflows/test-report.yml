@@ -98,16 +98,48 @@ jobs:
             const anyFailed = Object.values(pkgs).some(p => p.status === 'fail')
               || totalFail > 0;
 
-            // ── Overall coverage (from go tool cover -func) ─────────────────
+            // ── Parse function-level coverage (go tool cover -func output) ──
+            const mod = 'github.com/kzs0/bedrock';
             let totalCov = 'N/A';
+            const uncoveredByPkg = {}; // pkg → [{ file, func }]
+            const lowCovByPkg   = {}; // pkg → [{ file, func, pct }]  (<80%, >0%)
+
             try {
-              const txt = fs.readFileSync('coverage.txt', 'utf8');
-              const m = txt.match(/^total:\s+\(statements\)\s+([\d.]+)%/m);
-              if (m) totalCov = m[1] + '%';
-            } catch {}
+              const lines = fs.readFileSync('coverage.txt', 'utf8').trim().split('\n');
+              for (const line of lines) {
+                // "total: (statements)  64.4%"
+                const tot = line.match(/^total:\s+\(statements\)\s+([\d.]+)%/);
+                if (tot) { totalCov = tot[1] + '%'; continue; }
+
+                // "github.com/kzs0/bedrock/cloud.go:34:   FuncName   100.0%"
+                const m = line.match(/^(.+):(\d+):\s+(\S+)\s+([\d.]+)%\s*$/);
+                if (!m) continue;
+
+                const [, filePath, , fnName, pctStr] = m;
+                const pct = parseFloat(pctStr);
+
+                // Derive short package label from file path
+                const rel = filePath.replace(mod + '/', '');
+                const slash = rel.lastIndexOf('/');
+                const pkg  = slash >= 0 ? `${mod}/${rel.slice(0, slash)}` : mod;
+                const file = slash >= 0 ? rel.slice(slash + 1) : rel;
+
+                // Skip example binary and generated files
+                if (pkg.includes('/example')) continue;
+
+                if (pct === 0) {
+                  uncoveredByPkg[pkg] ??= [];
+                  uncoveredByPkg[pkg].push({ file, func: fnName });
+                } else if (pct < 80) {
+                  lowCovByPkg[pkg] ??= [];
+                  lowCovByPkg[pkg].push({ file, func: fnName, pct });
+                }
+              }
+            } catch (e) {
+              core.warning(`coverage.txt parse failed: ${e.message}`);
+            }
 
             // ── Package table ───────────────────────────────────────────────
-            const mod = 'github.com/kzs0/bedrock';
             const tableRows = Object.entries(pkgs)
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([pkg, p]) => {
@@ -163,6 +195,54 @@ jobs:
 
             if (failSections.length > 0) {
               parts.push('', '### Failures', '', ...failSections);
+            }
+
+            // ── Uncovered functions (0%) ────────────────────────────────────
+            const uncovPkgs = Object.entries(uncoveredByPkg)
+              .sort(([a], [b]) => a.localeCompare(b));
+
+            if (uncovPkgs.length > 0) {
+              const rows = [];
+              for (const [pkg, funcs] of uncovPkgs) {
+                const label = pkg === mod ? '_(root)_' : `\`${pkg.replace(mod + '/', '')}\``;
+                for (const { file, func } of funcs) {
+                  rows.push(`| ${label} | \`${file}\` | \`${func}\` |`);
+                }
+              }
+              parts.push(
+                '',
+                '<details>',
+                `<summary>🔴 ${rows.length} uncovered functions (0%) — click to expand</summary>`,
+                '',
+                '| Package | File | Function |',
+                '|---------|------|----------|',
+                ...rows,
+                '</details>',
+              );
+            }
+
+            // ── Low-coverage functions (<80%, >0%) ──────────────────────────
+            const lowPkgs = Object.entries(lowCovByPkg)
+              .sort(([a], [b]) => a.localeCompare(b));
+
+            if (lowPkgs.length > 0) {
+              const rows = [];
+              for (const [pkg, funcs] of lowPkgs) {
+                const label = pkg === mod ? '_(root)_' : `\`${pkg.replace(mod + '/', '')}\``;
+                for (const { file, func, pct } of funcs.sort((a, b) => a.pct - b.pct)) {
+                  rows.push(`| ${label} | \`${file}\` | \`${func}\` | ${pct.toFixed(1)}% |`);
+                }
+              }
+              parts.push(
+                '',
+                '<details>',
+                `<summary>🟡 ${rows.length} partially covered functions (&lt;80%) — click to expand</summary>`,
+                '',
+                '| Package | File | Function | Coverage |',
+                '|---------|------|----------|---------|',
+                ...rows,
+                '</details>',
+              );
             }
 
             parts.push('', `<sub>Commit ${context.sha.slice(0, 7)} · ${new Date().toUTCString()}</sub>`);

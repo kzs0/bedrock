@@ -194,6 +194,13 @@ func (t *Tracer) export(span *Span) {
 	}()
 }
 
+// SetExporter replaces the current span exporter. This is used by Init() when
+// WithCloud is active to fan-out to both a local and a cloud exporter after the
+// Bedrock instance has been created by New().
+func (t *Tracer) SetExporter(e Exporter) {
+	t.exporter = e
+}
+
 // Shutdown shuts down the tracer and flushes any pending spans.
 func (t *Tracer) Shutdown(ctx context.Context) error {
 	if t.exporter != nil {

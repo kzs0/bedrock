@@ -27,6 +27,10 @@ bedrock/
 ├── middleware.go    # HTTP middleware with trace propagation
 ├── client.go        # Instrumented HTTP client
 ├── noop.go          # Noop implementation for uninitialized contexts
+├── cloud.go         # WithCloud(): managed platform (traces via gRPC, retryExporter, fanOutExporter)
+├── env_detect.go    # Auto-detection: process, git, Kubernetes, container, cloud (AWS/GCP)
+├── metrics_push.go  # Background Prometheus metrics push (backpressure, final flush)
+├── profile_push.go  # Background profile push (CPU, heap, goroutine, mutex; OTLP Profiles)
 ├── attr/            # Attribute types (String, Int, Error, Event, etc.)
 ├── trace/           # Tracing: Tracer, Span, SpanContext, W3C propagation
 │   └── otlp/        # OpenTelemetry Protocol export
@@ -190,6 +194,27 @@ ctx, close := bedrock.Init(ctx,
 ```
 
 ## Common Patterns
+
+### Cloud Integration
+
+Use `WithCloud()` to send all telemetry to the managed platform. When a local
+`BEDROCK_TRACE_URL` is also configured, spans are fanned out to both targets:
+
+```go
+ctx, close := bedrock.Init(context.Background(),
+    bedrock.WithCloud("brk_live_abc123",
+        bedrock.CloudPushInterval(30*time.Second),
+        bedrock.CloudProfileInterval(5*time.Minute),
+    ),
+)
+defer close()
+```
+
+**Key internals**:
+- `wireCloud()` replaces the batch processor with a higher-capacity cloud one and starts `startMetricsPush` / `startProfilePush` goroutines.
+- `retryExporter` wraps the gRPC exporter with 3-attempt exponential back-off (1s, 2s, 4s).
+- `fanOutExporter` sends each batch to both the local and cloud exporters, returning the first error but always calling all exporters.
+- `detectEnvironment()` is called during `Init()` and prepends detected resource attrs before user-supplied `WithStaticAttrs` values.
 
 ### Adding a New Option
 
@@ -732,6 +757,15 @@ Useful for log-based analysis and correlation with traces.
 | `options.go` | Functional options pattern | `Attrs()`, `MetricLabels()`, `WithOperationName()` |
 | `middleware.go` | HTTP middleware | `HTTPMiddleware()`, middleware options |
 | `noop.go` | Noop implementations | `noopOp`, `noopSrc`, `noopStep` |
+
+### Cloud Integration
+
+| File | Purpose | Key Types/Functions |
+|------|---------|---------------------|
+| `cloud.go` | Managed platform wiring | `WithCloud()`, `CloudOption`, `retryExporter`, `fanOutExporter`, `wireCloud()` |
+| `env_detect.go` | Resource auto-detection | `detectEnvironment()`, `detectAWS()`, `detectGCP()`, `detectKubernetes()` |
+| `metrics_push.go` | Background metrics push | `startMetricsPush()`, `pushMetrics()` |
+| `profile_push.go` | Background profile push | `startProfilePush()`, `collectAndPushProfile()`, `ProfileType` |
 
 ### HTTP Integration
 
