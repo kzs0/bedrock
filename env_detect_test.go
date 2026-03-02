@@ -151,7 +151,7 @@ func TestDetectGCP_Success(t *testing.T) {
 		case "/computeMetadata/v1/instance/id":
 			_, _ = fmt.Fprint(w, "1234567890123456789")
 		case "/computeMetadata/v1/instance/zone":
-			fmt.Fprint(w, "projects/123/zones/us-central1-a")
+			_, _ = fmt.Fprint(w, "projects/123/zones/us-central1-a")
 		default:
 			http.NotFound(w, r)
 		}
@@ -232,6 +232,117 @@ func TestSafeDetect_RecoversPanic(t *testing.T) {
 
 	// No panic propagated; out is just empty.
 	_ = out
+}
+
+// ── Process detection (executable name) ──────────────────────────────────────
+
+func TestDetectProcess_ExecutableName(t *testing.T) {
+	attrs := detectProcess()
+	found := false
+	for _, a := range attrs {
+		if a.Key == "process.executable.name" {
+			found = true
+			if a.Value.String() == "" {
+				t.Error("expected non-empty process.executable.name")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected process.executable.name attribute")
+	}
+}
+
+// ── Git detection ─────────────────────────────────────────────────────────────
+
+func TestDetectGit_NoPanic(t *testing.T) {
+	// Under go test there is usually no vcs.revision; ensure no panic.
+	attrs := detectGit()
+	_ = attrs // result may be nil or a version attr, both fine
+}
+
+// ── Container detection ───────────────────────────────────────────────────────
+
+func TestDetectContainer_SkippedInKubernetes(t *testing.T) {
+	t.Setenv("KUBERNETES_NODE_NAME", "worker-1")
+	attrs := detectContainer()
+	if len(attrs) != 0 {
+		t.Errorf("expected container detection skipped in k8s, got %v", attrs)
+	}
+}
+
+func TestExtractContainerID_ContainerdFormat(t *testing.T) {
+	id := strings.Repeat("c", 64)
+	line := fmt.Sprintf("0::/system.slice/containerd-%s.scope", id)
+	got := extractContainerID(line)
+	if got != id {
+		t.Errorf("expected %s, got %s", id, got)
+	}
+}
+
+func TestExtractContainerID_CriContainerdFormat(t *testing.T) {
+	id := strings.Repeat("d", 64)
+	line := fmt.Sprintf("0::/kubepods/besteffort/pod123/cri-containerd-%s", id)
+	got := extractContainerID(line)
+	if got != id {
+		t.Errorf("expected %s, got %s", id, got)
+	}
+}
+
+// ── AWS / GCP edge cases ──────────────────────────────────────────────────────
+
+func TestDetectAWS_NoRegion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest/meta-data/instance-id":
+			_, _ = fmt.Fprint(w, "i-abcdef1234567890a")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	origDetect := detectAWS
+	detectAWS = func() []attr.Attr { return detectAWSWithBase(srv.URL) }
+	defer func() { detectAWS = origDetect }()
+
+	attrs := detectAWS()
+	assertAttr(t, attrs, "cloud.provider", "aws")
+	assertAttr(t, attrs, "host.id", "i-abcdef1234567890a")
+	// cloud.region should be absent (no 404 endpoint served it).
+	for _, a := range attrs {
+		if a.Key == "cloud.region" {
+			t.Errorf("expected no cloud.region, but got %q", a.Value.String())
+		}
+	}
+}
+
+func TestDetectGCP_NoZone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Metadata-Flavor") != "Google" {
+			http.Error(w, "missing header", http.StatusForbidden)
+			return
+		}
+		switch r.URL.Path {
+		case "/computeMetadata/v1/instance/id":
+			_, _ = fmt.Fprint(w, "9876543210987654321")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	origDetect := detectGCP
+	detectGCP = func() []attr.Attr { return detectGCPWithBase(srv.URL) }
+	defer func() { detectGCP = origDetect }()
+
+	attrs := detectGCP()
+	assertAttr(t, attrs, "cloud.provider", "gcp")
+	assertAttr(t, attrs, "host.id", "9876543210987654321")
+	for _, a := range attrs {
+		if a.Key == "cloud.region" {
+			t.Errorf("expected no cloud.region, but got %q", a.Value.String())
+		}
+	}
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

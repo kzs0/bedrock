@@ -17,6 +17,8 @@ An opinionated observability library for Go that provides tracing, metrics, prof
 - **Canonical logging**: Complete operation lifecycle logging for analysis
 - **Convenient APIs**: Direct logging and metrics functions without manual setup
 - **Production-ready**: Security timeouts, graceful shutdown, DoS protection, trace sampling
+- **Cloud backend**: One-line `WithCloud()` integration sends traces, metrics, and profiles to the managed Bedrock platform
+- **Auto environment detection**: Process, Kubernetes pod, container ID, and cloud provider attributes detected and attached automatically
 
 ## Table of Contents
 
@@ -41,6 +43,8 @@ An opinionated observability library for Go that provides tracing, metrics, prof
   - [Environment Variables](#environment-variables)
   - [Programmatic](#programmatic)
   - [Security Defaults](#security-defaults)
+- [Cloud Backend](#cloud-backend)
+- [Environment Auto-Detection](#environment-auto-detection)
 - [Examples](#examples)
   - [HTTP Service](#http-service)
   - [Background Worker](#background-worker)
@@ -762,6 +766,75 @@ go func() {
 }()
 
 appServer.ListenAndServe()
+```
+
+## Cloud Backend
+
+Connect to the managed Bedrock platform with a single option. Traces are exported via gRPC (OTLP), metrics are pushed in Prometheus text format every 15 seconds, and profiles (CPU, heap, goroutine, mutex) are pushed every 60 seconds.
+
+```go
+ctx, close := bedrock.Init(context.Background(),
+    bedrock.WithCloud("brk_live_yourkey"),
+)
+defer close()
+```
+
+**`WithCloud` options**:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `CloudEndpoint(url)` | `https://ingest.bedrock.dev` | Override ingest URL |
+| `CloudInsecure()` | false | Disable TLS (local dev/testing) |
+| `CloudPushInterval(d)` | 15s | How often metrics are pushed |
+| `CloudProfileInterval(d)` | 60s | How often profiles are pushed |
+| `CloudProfileCPUSampleDuration(d)` | 10s | CPU profiler collection window |
+
+**Fan-out with a local exporter**: when `BEDROCK_TRACE_URL` is also set, spans are sent to **both** the local endpoint and the cloud simultaneously:
+
+```go
+ctx, close := bedrock.Init(context.Background(),
+    bedrock.WithConfig(bedrock.Config{
+        TraceURL: "http://localhost:4318/v1/traces", // local Jaeger
+    }),
+    bedrock.WithCloud("brk_live_yourkey"), // also send to cloud
+)
+defer close()
+```
+
+**Authentication**: the API key is sent as `Authorization: Bearer <key>` for metrics and profiles, and as the `x-bedrock-key` gRPC metadata header for traces.
+
+## Environment Auto-Detection
+
+When `bedrock.Init` is called, Bedrock automatically detects and attaches resource attributes from the runtime environment. These are prepended to static attrs, so `WithStaticAttrs` values always win on collision.
+
+**Detected attributes**:
+
+| Attribute | Source |
+|-----------|--------|
+| `process.pid` | `os.Getpid()` |
+| `process.executable.name` | `os.Executable()` |
+| `host.name` | `os.Hostname()` |
+| `service.version` | `vcs.revision` from `debug.ReadBuildInfo()` (first 12 chars) |
+| `k8s.pod.name` | `$HOSTNAME` env var or `/etc/hostname` |
+| `k8s.namespace` | `$KUBERNETES_NAMESPACE` or `/var/run/secrets/kubernetes.io/serviceaccount/namespace` |
+| `k8s.node.name` | `$KUBERNETES_NODE_NAME` |
+| `k8s.container.name` | `$KUBERNETES_CONTAINER_NAME` |
+| `container.id` | `/proc/self/cgroup` (Docker/containerd, skipped in Kubernetes) |
+| `cloud.provider` | AWS IMDS or GCP metadata server |
+| `host.id` | EC2 instance ID or GCE instance ID |
+| `cloud.region` | AWS placement region or GCP zone (trimmed to region) |
+
+All detectors run with a 500ms timeout and panic recovery — a slow or unavailable metadata server never blocks initialization.
+
+**Override any auto-detected attribute**:
+
+```go
+ctx, close := bedrock.Init(ctx,
+    bedrock.WithStaticAttrs(
+        attr.String("host.name", "custom-name"), // overrides detected value
+    ),
+)
+defer close()
 ```
 
 ## Examples

@@ -107,6 +107,30 @@ func TestMetricsPush_Backpressure(t *testing.T) {
 	}
 }
 
+// TestMetricsPush_ErrorResponse verifies that a non-2xx server response is
+// treated as a failure (the push function logs a warning and does not panic).
+func TestMetricsPush_ErrorResponse(t *testing.T) {
+	var requestCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	reg := metric.NewRegistry("")
+	cfg := cloudConfig{
+		apiKey:       "key",
+		endpoint:     srv.URL,
+		pushInterval: 24 * time.Hour,
+	}
+	stop := startMetricsPush(reg, nil, cfg)
+	stop(context.Background()) // final push triggers the 500 response
+
+	if requestCount.Load() < 1 {
+		t.Error("expected at least one push attempt")
+	}
+}
+
 // TestMetricsPush_FinalPushOnStop verifies that stop() triggers exactly one
 // final push even when the ticker has not fired yet.
 func TestMetricsPush_FinalPushOnStop(t *testing.T) {

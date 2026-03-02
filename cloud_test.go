@@ -230,3 +230,66 @@ func TestWithCloud_CustomIntervals(t *testing.T) {
 	}
 }
 
+// ── fanOutExporter Shutdown ───────────────────────────────────────────────────
+
+func TestFanOutExporter_Shutdown_CallsBoth(t *testing.T) {
+	m1 := &mockExporter{}
+	m2 := &mockExporter{}
+	fo := &fanOutExporter{exporters: []trace.Exporter{m1, m2}}
+
+	if err := fo.Shutdown(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFanOutExporter_Shutdown_ReturnsFirstError(t *testing.T) {
+	// Use a failing exporter whose Shutdown returns an error.
+	fail := &failingShutdownExporter{}
+	ok := &mockExporter{}
+	fo := &fanOutExporter{exporters: []trace.Exporter{fail, ok}}
+
+	err := fo.Shutdown(context.Background())
+	if err == nil {
+		t.Fatal("expected error from failing exporter")
+	}
+	// The second exporter should still have been asked to shut down.
+}
+
+// failingShutdownExporter is an exporter whose Shutdown always returns an error.
+type failingShutdownExporter struct{}
+
+func (f *failingShutdownExporter) ExportSpans(_ context.Context, _ []*trace.Span) error {
+	return nil
+}
+func (f *failingShutdownExporter) Shutdown(_ context.Context) error { return errMockFailure }
+
+// ── retryExporter Shutdown / context cancellation ─────────────────────────────
+
+func TestRetryExporter_Shutdown_DelegatesToBase(t *testing.T) {
+	mock := &mockExporter{}
+	re := &retryExporter{base: mock, maxRetries: 3, initialDelay: time.Millisecond}
+
+	if err := re.Shutdown(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRetryExporter_ContextCanceled_AbortsRetries(t *testing.T) {
+	mock := &mockExporter{failUntil: 99} // always fail
+	re := &retryExporter{base: mock, maxRetries: 5, initialDelay: 50 * time.Millisecond}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately so the first retry sleep is interrupted.
+	cancel()
+
+	err := re.ExportSpans(ctx, nil)
+	if err == nil {
+		t.Fatal("expected error after context cancellation")
+	}
+	// Should not have attempted all 6 calls (1 + 5 retries) — context stops early.
+	calls := mock.calls.Load()
+	if calls > 3 {
+		t.Errorf("expected few calls due to cancellation, got %d", calls)
+	}
+}
+

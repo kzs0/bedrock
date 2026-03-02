@@ -79,6 +79,58 @@ func TestProfilePush_APIKeyInHeader(t *testing.T) {
 	}
 }
 
+// TestProfilePush_MutexProfileSent verifies the mutex profile is sent with the
+// correct x-profile-type header.
+func TestProfilePush_MutexProfileSent(t *testing.T) {
+	var gotProfileType atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotProfileType.Store(r.Header.Get("x-profile-type"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	err := collectAndPushProfile("svc", attr.EmptySet, srv.URL, "tok", time.Millisecond, ProfileTypeMutex)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pt := gotProfileType.Load(); pt != "mutex" {
+		t.Errorf("expected x-profile-type=mutex, got %v", pt)
+	}
+}
+
+// TestProfilePush_ErrorStatus verifies that a non-2xx response is returned as
+// an error by collectAndPushProfile.
+func TestProfilePush_ErrorStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	err := collectAndPushProfile("svc", attr.EmptySet, srv.URL, "tok", time.Millisecond, ProfileTypeHeap)
+	if err == nil {
+		t.Fatal("expected error for 400 response")
+	}
+}
+
+// TestProfilePush_UnknownProfileType verifies that an unknown ProfileType
+// returns an error immediately without making a network request.
+func TestProfilePush_UnknownProfileType(t *testing.T) {
+	var requestCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	err := collectAndPushProfile("svc", attr.EmptySet, srv.URL, "tok", time.Millisecond, ProfileType("unknown"))
+	if err == nil {
+		t.Fatal("expected error for unknown profile type")
+	}
+	if requestCount.Load() != 0 {
+		t.Error("expected no HTTP request for unknown profile type")
+	}
+}
+
 // TestProfilePush_StopStopsGoroutine verifies no goroutine leak after stop.
 func TestProfilePush_StopStopsGoroutine(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
