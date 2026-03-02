@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kzs0/bedrock/attr"
 	"github.com/kzs0/bedrock/trace"
 	"github.com/kzs0/bedrock/trace/otlp"
 )
@@ -232,18 +231,3 @@ func (f *fanOutExporter) Shutdown(ctx context.Context) error {
 	return firstErr
 }
 
-// ── attr helpers ──────────────────────────────────────────────────────────────
-
-// staticAttrsToHeaders converts a static attr.Set to HTTP header key-value
-// pairs prefixed with "x-bedrock-attr-". Used to send resource attributes
-// alongside metrics and profiles.
-func staticAttrsToHeader(set attr.Set) map[string]string {
-	headers := make(map[string]string)
-	set.Range(func(a attr.Attr) bool {
-		// Sanitize key: replace dots with dashes for HTTP header compatibility.
-		key := "x-bedrock-attr-" + strings.ReplaceAll(a.Key, ".", "-")
-		headers[key] = a.Value.String()
-		return true
-	})
-	return headers
-}

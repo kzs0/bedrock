@@ -293,7 +293,7 @@ func (d *errorDetail) FormatStack() string {
 		sb.WriteString(" (")
 		sb.WriteString(f.File)
 		sb.WriteByte(':')
-		sb.WriteString(fmt.Sprintf("%d", f.Line))
+		fmt.Fprintf(&sb, "%d", f.Line)
 		sb.WriteByte(')')
 		if !more {
 			break

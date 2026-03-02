@@ -147,7 +147,7 @@ func collectAndPushProfile(
 	if err != nil {
 		return fmt.Errorf("profile http: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("profile push: unexpected status %d for type %s", resp.StatusCode, pt)

@@ -83,7 +83,7 @@ func pushMetrics(ctx context.Context, registry *metric.Registry, endpoint, apiKe
 	if err != nil {
 		return fmt.Errorf("metrics http: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("metrics push: unexpected status %d", resp.StatusCode)

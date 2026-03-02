@@ -15,10 +15,9 @@ import (
 // ── retryExporter ─────────────────────────────────────────────────────────────
 
 type mockExporter struct {
-	calls      atomic.Int32
-	failUntil  int32
-	spans      [][]*trace.Span
-	headers    http.Header
+	calls     atomic.Int32
+	failUntil int32
+	spans     [][]*trace.Span
 }
 
 func (m *mockExporter) ExportSpans(_ context.Context, spans []*trace.Span) error {

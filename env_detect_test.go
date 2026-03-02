@@ -119,9 +119,9 @@ func TestDetectAWS_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/latest/meta-data/instance-id":
-			fmt.Fprint(w, "i-1234567890abcdef0")
+			_, _ = fmt.Fprint(w, "i-1234567890abcdef0")
 		case "/latest/meta-data/placement/region":
-			fmt.Fprint(w, "us-east-1")
+			_, _ = fmt.Fprint(w, "us-east-1")
 		default:
 			http.NotFound(w, r)
 		}
@@ -149,7 +149,7 @@ func TestDetectGCP_Success(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/computeMetadata/v1/instance/id":
-			fmt.Fprint(w, "1234567890123456789")
+			_, _ = fmt.Fprint(w, "1234567890123456789")
 		case "/computeMetadata/v1/instance/zone":
 			fmt.Fprint(w, "projects/123/zones/us-central1-a")
 		default:
@@ -253,9 +253,10 @@ func unsetEnv(t *testing.T, keys ...string) {
 	t.Helper()
 	for _, k := range keys {
 		old, exists := os.LookupEnv(k)
-		os.Unsetenv(k)
+		_ = os.Unsetenv(k)
 		if exists {
-			t.Cleanup(func() { os.Setenv(k, old) })
+			k, old := k, old
+			t.Cleanup(func() { _ = os.Setenv(k, old) })
 		}
 	}
 }
