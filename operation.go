@@ -69,13 +69,42 @@ func (op *operationState) setAttr(attrs ...attr.Attr) {
 
 	op.attrs = op.attrs.Merge(attrs...)
 
-	// Check for error attribute to mark operation as failed
+	// Check for error attribute to mark operation as failed and expand details.
 	for _, a := range attrs {
-		if a.Key == "error" && a.Value.AsString() != "" {
+		if a.Key != "error" {
+			continue
+		}
+		switch a.Value.Kind() {
+		case attr.KindError:
+			det := a.Value.AsError()
+			if det == nil || det.Err() == nil {
+				continue
+			}
 			op.success = false
-			op.failure = fmt.Errorf("%s", a.Value.AsString())
+			op.failure = det.Err()
 			if op.span != nil {
 				op.span.RecordError(op.failure)
+			}
+			// Expand into structured sub-attributes for rich error context.
+			extra := make([]attr.Attr, 0, 5)
+			extra = append(extra, attr.String("error.type", det.TypeName()))
+			extra = append(extra, attr.String("error.message", det.Err().Error()))
+			if stack := det.FormatStack(); stack != "" {
+				extra = append(extra, attr.String("error.stack", stack))
+			}
+			if chain := det.FormatChain(); chain != "" {
+				extra = append(extra, attr.String("error.chain", chain))
+			}
+			extra = append(extra, attr.String("error.fingerprint", det.Fingerprint()))
+			op.attrs = op.attrs.Merge(extra...)
+		case attr.KindString:
+			// Legacy path: plain string error value.
+			if a.Value.String() != "" {
+				op.success = false
+				op.failure = fmt.Errorf("%s", a.Value.String())
+				if op.span != nil {
+					op.span.RecordError(op.failure)
+				}
 			}
 		}
 	}
@@ -212,6 +241,16 @@ func (op *operationState) logCanonical(duration time.Duration) {
 
 	if op.failure != nil {
 		logFields = append(logFields, "error", op.failure.Error())
+		// Include rich error details if captured.
+		if v, ok := op.attrs.Get("error.type"); ok {
+			logFields = append(logFields, "error.type", v.String())
+		}
+		if v, ok := op.attrs.Get("error.fingerprint"); ok {
+			logFields = append(logFields, "error.fingerprint", v.String())
+		}
+		if v, ok := op.attrs.Get("error.stack"); ok {
+			logFields = append(logFields, "error.stack", v.String())
+		}
 	}
 
 	if len(attrs) > 0 {

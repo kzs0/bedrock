@@ -1,8 +1,13 @@
 package attr
 
 import (
+	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"math"
+	"reflect"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -18,6 +23,7 @@ const (
 	KindDuration
 	KindTime
 	KindAny
+	KindError
 )
 
 // Value is a union type that can hold any attribute value efficiently.
@@ -173,6 +179,11 @@ func (v Value) AsAny() any {
 		return time.Duration(v.num)
 	case KindTime:
 		return time.Unix(0, int64(v.num)).UTC()
+	case KindError:
+		if d, ok := v.any.(*errorDetail); ok && d.err != nil {
+			return d.err.Error()
+		}
+		return ""
 	default:
 		return v.any
 	}
@@ -198,6 +209,11 @@ func (v Value) String() string {
 		return time.Duration(v.num).String()
 	case KindTime:
 		return time.Unix(0, int64(v.num)).UTC().Format(time.RFC3339Nano)
+	case KindError:
+		if d, ok := v.any.(*errorDetail); ok && d.err != nil {
+			return d.err.Error()
+		}
+		return ""
 	default:
 		return fmt.Sprintf("%v", v.any)
 	}
@@ -211,4 +227,162 @@ func float64Bits(f float64) uint64 {
 // float64FromBits converts a bit representation to float64.
 func float64FromBits(b uint64) float64 {
 	return math.Float64frombits(b)
+}
+
+// errorDetail holds structured information about an error, captured at the call site.
+type errorDetail struct {
+	err      error
+	typeName string    // reflect.TypeOf(err).String()
+	pcs      []uintptr // raw program counters from runtime.Callers
+}
+
+// Err returns the underlying error.
+func (d *errorDetail) Err() error { return d.err }
+
+// TypeName returns the Go type name of the error.
+func (d *errorDetail) TypeName() string { return d.typeName }
+
+// ErrorValue creates a Value that carries a structured error with stack trace.
+// skip controls how many call frames to skip above ErrorValue itself.
+func ErrorValue(err error, skip int) Value {
+	if err == nil {
+		return StringValue("")
+	}
+	const maxFrames = 32
+	pcs := make([]uintptr, maxFrames)
+	n := runtime.Callers(skip+2, pcs)
+	pcs = pcs[:n]
+
+	typeName := reflect.TypeOf(err).String()
+	return Value{kind: KindError, any: &errorDetail{err: err, typeName: typeName, pcs: pcs}}
+}
+
+// AsError returns the error detail. Returns nil if the value is not a KindError.
+func (v Value) AsError() *errorDetail {
+	if v.kind != KindError {
+		return nil
+	}
+	d, _ := v.any.(*errorDetail)
+	return d
+}
+
+// FormatStack formats the captured stack trace as "funcName (file:line)\n..." strings,
+// skipping runtime-internal frames, up to 32 frames.
+func (d *errorDetail) FormatStack() string {
+	if len(d.pcs) == 0 {
+		return ""
+	}
+	frames := runtime.CallersFrames(d.pcs)
+	var sb strings.Builder
+	for {
+		f, more := frames.Next()
+		if f.Function == "" {
+			break
+		}
+		// Skip runtime internals
+		if strings.HasPrefix(f.Function, "runtime.") {
+			if more {
+				continue
+			}
+			break
+		}
+		if sb.Len() > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(f.Function)
+		sb.WriteString(" (")
+		sb.WriteString(f.File)
+		sb.WriteByte(':')
+		sb.WriteString(fmt.Sprintf("%d", f.Line))
+		sb.WriteByte(')')
+		if !more {
+			break
+		}
+	}
+	return sb.String()
+}
+
+// errorLink represents one entry in an error chain.
+type errorLink struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// FormatChain walks the Unwrap() error chain and returns a JSON array of
+// {type, message} objects. Returns "" if there is no wrapped error.
+func (d *errorDetail) FormatChain() string {
+	type unwrapper interface{ Unwrap() error }
+	var chain []errorLink
+	cur := d.err
+	for {
+		u, ok := cur.(unwrapper)
+		if !ok {
+			break
+		}
+		inner := u.Unwrap()
+		if inner == nil {
+			break
+		}
+		chain = append(chain, errorLink{
+			Type:    reflect.TypeOf(inner).String(),
+			Message: inner.Error(),
+		})
+		cur = inner
+	}
+	if len(chain) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteByte('[')
+	for i, l := range chain {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(`{"type":`)
+		sb.WriteString(jsonString(l.Type))
+		sb.WriteString(`,"message":`)
+		sb.WriteString(jsonString(l.Message))
+		sb.WriteByte('}')
+	}
+	sb.WriteByte(']')
+	return sb.String()
+}
+
+// Fingerprint produces a stable 16-char hex fingerprint by hashing the error
+// type name and the top 3 non-runtime stack frame PCs. Two errors at the same
+// call site with the same type produce the same fingerprint.
+func (d *errorDetail) Fingerprint() string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(d.typeName))
+	frames := runtime.CallersFrames(d.pcs)
+	count := 0
+	for count < 3 {
+		f, more := frames.Next()
+		if f.Function == "" {
+			break
+		}
+		if strings.HasPrefix(f.Function, "runtime.") {
+			if !more {
+				break
+			}
+			continue
+		}
+		_, _ = h.Write([]byte(f.Function))
+		count++
+		if !more {
+			break
+		}
+	}
+	b := h.Sum(nil)
+	return hex.EncodeToString(b)
+}
+
+// jsonString returns a JSON-encoded string (basic escaping).
+func jsonString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	s = strings.ReplaceAll(s, "\t", `\t`)
+	return `"` + s + `"`
 }

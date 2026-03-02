@@ -55,12 +55,28 @@ func Any(key string, value any) Attr {
 	return Attr{Key: key, Value: AnyValue(value)}
 }
 
-// Error creates an attribute for an error.
+// Error creates an attribute for an error. It captures the error type, a stack
+// trace at the call site, and the error chain. Operations that receive this
+// attribute are automatically marked as failed. The stack and type information
+// is expanded into additional span attributes (error.type, error.stack,
+// error.chain, error.fingerprint) when registered with an operation.
 func Error(err error) Attr {
 	if err == nil {
 		return Attr{Key: "error", Value: StringValue("")}
 	}
-	return Attr{Key: "error", Value: StringValue(err.Error())}
+	return Attr{Key: "error", Value: ErrorValue(err, 1)}
+}
+
+// ErrorWithStack creates an error attribute like Error but lets the caller
+// control how many additional stack frames to skip. Use this when wrapping
+// attr.Error in helper functions to point the stack to the real call site.
+//
+// A skip of 0 is equivalent to calling attr.Error directly.
+func ErrorWithStack(err error, skip int) Attr {
+	if err == nil {
+		return Attr{Key: "error", Value: StringValue("")}
+	}
+	return Attr{Key: "error", Value: ErrorValue(err, skip+1)}
 }
 
 // Event represents a trace event with attributes.
