@@ -13,6 +13,7 @@ import (
 // OpStep is a handle to a step within an operation.
 // Steps contribute their attributes to the parent operation.
 type OpStep struct {
+	noop   bool // true = pre-allocated singleton; all methods fast-return
 	name   string
 	span   *trace.Span
 	attrs  attr.Set
@@ -25,15 +26,16 @@ type OpStep struct {
 type operationState struct {
 	mu sync.Mutex
 
-	bedrock      *Bedrock
-	span         *trace.Span
-	name         string
-	startTime    time.Time
-	attrs        attr.Set
-	metricLabels []string // defined label names (upfront registration)
-	parent       *operationState
-	success      bool
-	failure      error
+	bedrock       *Bedrock
+	span          *trace.Span
+	name          string
+	startTime     time.Time
+	attrs         attr.Set
+	metricLabels  []string // defined label names (upfront registration)
+	cachedMetrics *cachedOpMetrics
+	parent        *operationState
+	success       bool
+	failure       error
 
 	// Child tracking
 	steps []*OpStep
@@ -41,28 +43,31 @@ type operationState struct {
 
 // newOperationState creates a new operation state.
 func newOperationState(b *Bedrock, span *trace.Span, name string, cfg operationConfig, parent *operationState) *operationState {
+	var cm *cachedOpMetrics
+	if !b.isNoop {
+		cm = b.getOpMetrics(name, cfg.metricLabels)
+	}
 	return &operationState{
-		bedrock:      b,
-		span:         span,
-		name:         name,
-		startTime:    time.Now(),
-		attrs:        attr.NewSet(cfg.attrs...),
-		metricLabels: cfg.metricLabels,
-		parent:       parent,
-		success:      true, // Default to success
-		steps:        make([]*OpStep, 0),
+		bedrock:       b,
+		span:          span,
+		name:          name,
+		startTime:     time.Now(),
+		attrs:         attr.NewSet(cfg.attrs...),
+		metricLabels:  cfg.metricLabels,
+		cachedMetrics: cm,
+		parent:        parent,
+		success:       true, // Default to success
 	}
 }
 
 // setAttr adds or updates attributes on the operation.
+// Span attrs are not updated here; they are synced in bulk at end() to avoid
+// a Merge allocation per Register call.
 func (op *operationState) setAttr(attrs ...attr.Attr) {
 	op.mu.Lock()
 	defer op.mu.Unlock()
 
 	op.attrs = op.attrs.Merge(attrs...)
-	if op.span != nil {
-		op.span.SetAttr(attrs...)
-	}
 
 	// Check for error attribute to mark operation as failed
 	for _, a := range attrs {
@@ -76,20 +81,16 @@ func (op *operationState) setAttr(attrs ...attr.Attr) {
 	}
 }
 
-// buildMetricLabels builds the metric labels from registered names.
+// buildMetricLabels resolves runtime label values from the operation's attrs.
 // If a label name was registered but no attribute with that key exists, uses "_".
-// Static attributes are automatically included as labels.
+// Static label values come from the pre-cached Bedrock.staticLabelVals.
 func (op *operationState) buildMetricLabels() []attr.Attr {
 	op.mu.Lock()
 	defer op.mu.Unlock()
 
-	// Start with static attributes
-	labels := make([]attr.Attr, 0, len(op.metricLabels)+op.bedrock.staticAttr.Len())
-
-	op.bedrock.staticAttr.Range(func(a attr.Attr) bool {
-		labels = append(labels, a)
-		return true
-	})
+	nStatic := len(op.bedrock.staticLabelVals)
+	labels := make([]attr.Attr, nStatic, nStatic+len(op.metricLabels))
+	copy(labels, op.bedrock.staticLabelVals)
 
 	// Add operation-specific labels (search operation attrs first, then step attrs)
 	for _, labelName := range op.metricLabels {
@@ -123,7 +124,6 @@ func (op *operationState) buildMetricLabels() []attr.Attr {
 		}
 
 		if !found {
-			// Use "_" as default value for missing labels
 			labels = append(labels, attr.String(labelName, "_"))
 		}
 	}
@@ -133,61 +133,38 @@ func (op *operationState) buildMetricLabels() []attr.Attr {
 
 // recordMetrics records all automatic metrics for this operation.
 func (op *operationState) recordMetrics() {
-	if op.bedrock.isNoop {
+	if op.bedrock.isNoop || op.cachedMetrics == nil {
 		return
 	}
 
 	duration := time.Since(op.startTime)
 	labels := op.buildMetricLabels()
+	cm := op.cachedMetrics
 
-	// Build combined label names (static + operation-specific)
-	staticLabelNames := make([]string, 0, op.bedrock.staticAttr.Len())
-	op.bedrock.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabelNames = append(staticLabelNames, a.Key)
-		return true
-	})
+	cm.count.With(labels...).Inc()
 
-	allLabelNames := append(staticLabelNames, op.metricLabels...)
-
-	// Record count
-	counter := op.bedrock.metrics.Counter(
-		op.name+"_count",
-		"Total count of "+op.name+" operations",
-		allLabelNames...,
-	)
-	counter.With(labels...).Inc()
-
-	// Record success or failure
 	if op.success {
-		successCounter := op.bedrock.metrics.Counter(
-			op.name+"_successes",
-			"Successful "+op.name+" operations",
-			allLabelNames...,
-		)
-		successCounter.With(labels...).Inc()
+		cm.success.With(labels...).Inc()
 	} else {
-		failureCounter := op.bedrock.metrics.Counter(
-			op.name+"_failures",
-			"Failed "+op.name+" operations",
-			allLabelNames...,
-		)
-		failureCounter.With(labels...).Inc()
+		cm.failure.With(labels...).Inc()
 	}
 
-	// Record duration in milliseconds
-	histogram := op.bedrock.metrics.Histogram(
-		op.name+"_duration_ms",
-		"Duration of "+op.name+" operations in milliseconds",
-		nil, // Use default buckets
-		allLabelNames...,
-	)
-	histogram.With(labels...).Observe(float64(duration.Milliseconds()))
+	cm.duration.With(labels...).Observe(float64(duration.Milliseconds()))
 }
 
 // end finishes the operation.
 func (op *operationState) end() {
-	// End the span
+	// Capture duration before any other work so the logged value matches
+	// the actual operation wall time rather than including log/metric overhead.
+	duration := time.Since(op.startTime)
+
+	// Sync accumulated attrs to span in one shot before ending, to avoid
+	// a Merge allocation on every Register call during the operation lifetime.
 	if op.span != nil {
+		op.mu.Lock()
+		finalAttrs := op.attrs
+		op.mu.Unlock()
+		op.span.SetAttrSet(finalAttrs)
 		op.span.End()
 	}
 
@@ -196,16 +173,14 @@ func (op *operationState) end() {
 
 	// Canonical log if enabled
 	if op.bedrock.config.LogCanonical && !op.bedrock.isNoop {
-		op.logCanonical()
+		op.logCanonical(duration)
 	}
 }
 
 // logCanonical writes a structured log of the complete operation.
-func (op *operationState) logCanonical() {
+func (op *operationState) logCanonical(duration time.Duration) {
 	op.mu.Lock()
 	defer op.mu.Unlock()
-
-	duration := time.Since(op.startTime)
 
 	// Collect attributes
 	attrs := make(map[string]any)
@@ -260,6 +235,9 @@ func (op *operationState) logCanonical() {
 //	defer step.Done()
 func StepFromContext(ctx context.Context, name string, opts ...StepOption) *OpStep {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return globalNoopStep
+	}
 	cfg := applyStepOptions(opts)
 
 	// Get parent operation
@@ -269,14 +247,11 @@ func StepFromContext(ctx context.Context, name string, opts ...StepOption) *OpSt
 
 	// Skip tracing if no-trace mode is active (from context or step option)
 	if !isNoTrace(ctx) && !cfg.noTrace {
-		var parentCtx context.Context
-		if parent != nil && parent.span != nil {
-			parentCtx = trace.ContextWithSpan(ctx, parent.span)
-		} else {
-			parentCtx = ctx
+		var parentSpan *trace.Span
+		if parent != nil {
+			parentSpan = parent.span
 		}
-
-		_, span = b.tracer.Start(parentCtx, name, trace.WithAttrs(cfg.attrs...))
+		_, span = b.tracer.StartSpan(ctx, name, parentSpan, nil, cfg.attrs)
 	}
 
 	step := &OpStep{
@@ -297,42 +272,37 @@ func StepFromContext(ctx context.Context, name string, opts ...StepOption) *OpSt
 	return step
 }
 
-// Register adds attributes or events to the step.
+// Register adds attributes to the step.
 // Attributes remain on the step but can be used as metric label values for the parent operation.
-// Events are recorded in traces.
 //
 // Usage:
 //
 //	step.Register(ctx,
 //	    attr.String("rows", "42"),
-//	    attr.NewEvent("query.complete"),
 //	)
-func (s *OpStep) Register(ctx context.Context, items ...attr.Registrable) {
-	attrs := make([]attr.Attr, 0)
-
-	for _, item := range items {
-		switch v := item.(type) {
-		case attr.Attr:
-			attrs = append(attrs, v)
-		case attr.Event:
-			// Register as trace event
-			if s.span != nil {
-				s.span.AddEvent(v.Name, v.Attrs...)
-			}
-		}
+func (s *OpStep) Register(ctx context.Context, attrs ...attr.Attr) {
+	if s.noop || len(attrs) == 0 {
+		return
 	}
+	s.attrs = s.attrs.Merge(attrs...)
+}
 
-	if len(attrs) > 0 {
-		if s.span != nil {
-			s.span.SetAttr(attrs...)
-		}
-		s.attrs = s.attrs.Merge(attrs...)
+// Event records a trace event on the step span.
+//
+// Usage:
+//
+//	step.Event(ctx, attr.NewEvent("query.complete"))
+func (s *OpStep) Event(ctx context.Context, event attr.Event) {
+	if s.span != nil {
+		s.span.AddEvent(event.Name, event.Attrs...)
 	}
 }
 
-// Done ends the step.
+// Done ends the step, syncing accumulated attrs to the span in one shot.
 func (s *OpStep) Done() {
-	if s.span != nil {
-		s.span.End()
+	if s.noop || s.span == nil {
+		return
 	}
+	s.span.SetAttrSet(s.attrs)
+	s.span.End()
 }

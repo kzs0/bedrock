@@ -1,0 +1,201 @@
+name: Test Report
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    name: Test & Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      # -race: data race detection
+      # -count=1: bypass test result cache
+      # -coverprofile: per-statement coverage for all packages
+      - name: Run tests
+        id: tests
+        run: |
+          set +e
+          go test -json -race -count=1 \
+            -coverprofile=coverage.out \
+            -covermode=atomic \
+            ./... > test-results.json 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Generate coverage summary
+        run: go tool cover -func=coverage.out > coverage.txt 2>/dev/null || touch coverage.txt
+
+      # Parse test-results.json (NDJSON from go test -json), build a markdown
+      # summary, and post it as a PR comment — updating any previous one.
+      - name: Post test report comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // ── Parse NDJSON ────────────────────────────────────────────────
+            let events = [];
+            try {
+              events = fs.readFileSync('test-results.json', 'utf8')
+                .trim().split('\n')
+                .flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } });
+            } catch (e) {
+              core.warning(`test-results.json unreadable: ${e.message}`);
+            }
+
+            // ── Aggregate per package ───────────────────────────────────────
+            const pkgs = {};          // pkg → { pass, fail, skip, elapsed, status, cov }
+            const failOutput = {};    // "pkg||test" → { pkg, test, lines[] }
+
+            for (const ev of events) {
+              if (!ev.Package) continue;
+              pkgs[ev.Package] ??= { pass: 0, fail: 0, skip: 0, elapsed: 0, status: '', cov: '' };
+              const p = pkgs[ev.Package];
+
+              if (!ev.Test) {
+                if (ev.Action === 'pass' || ev.Action === 'fail') {
+                  p.status  = ev.Action;
+                  p.elapsed = ev.Elapsed ?? 0;
+                }
+                if (ev.Action === 'output' && ev.Output) {
+                  const m = ev.Output.match(/coverage:\s+([\d.]+)%/);
+                  if (m) p.cov = m[1] + '%';
+                }
+              } else {
+                if (ev.Action === 'pass') p.pass++;
+                if (ev.Action === 'skip') p.skip++;
+                if (ev.Action === 'fail') {
+                  p.fail++;
+                  const key = `${ev.Package}||${ev.Test}`;
+                  failOutput[key] ??= { pkg: ev.Package, test: ev.Test, lines: [] };
+                }
+                if (ev.Action === 'output') {
+                  const key = `${ev.Package}||${ev.Test}`;
+                  if (failOutput[key]) failOutput[key].lines.push(ev.Output);
+                }
+              }
+            }
+
+            // ── Totals ──────────────────────────────────────────────────────
+            let totalPass = 0, totalFail = 0, totalSkip = 0;
+            for (const p of Object.values(pkgs)) {
+              totalPass += p.pass;
+              totalFail += p.fail;
+              totalSkip += p.skip;
+            }
+            const anyFailed = Object.values(pkgs).some(p => p.status === 'fail')
+              || totalFail > 0;
+
+            // ── Overall coverage (from go tool cover -func) ─────────────────
+            let totalCov = 'N/A';
+            try {
+              const txt = fs.readFileSync('coverage.txt', 'utf8');
+              const m = txt.match(/^total:\s+\(statements\)\s+([\d.]+)%/m);
+              if (m) totalCov = m[1] + '%';
+            } catch {}
+
+            // ── Package table ───────────────────────────────────────────────
+            const mod = 'github.com/kzs0/bedrock';
+            const tableRows = Object.entries(pkgs)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([pkg, p]) => {
+                const label = pkg === mod ? '_(root)_' : `\`${pkg.replace(mod + '/', '')}\``;
+                const icon  = p.status === 'pass' ? '✅' : p.status === 'fail' ? '❌' : '⚠️';
+                const total = p.pass + p.fail + p.skip;
+                const dur   = p.elapsed > 0 ? (p.elapsed * 1000).toFixed(0) + ' ms' : '—';
+                return `| ${label} | ${icon} | ${total} | ${p.pass} | ${p.fail} | ${p.skip} | ${dur} | ${p.cov || '—'} |`;
+              });
+
+            const table = [
+              '| Package | | Tests | ✅ Pass | ❌ Fail | ⏭ Skip | Duration | Coverage |',
+              '|---------|:-:|------:|-------:|-------:|-------:|---------:|---------|',
+              ...tableRows,
+            ].join('\n');
+
+            // ── Failed test details (collapsible) ───────────────────────────
+            const failSections = Object.values(failOutput).map(({ pkg, test, lines }) => {
+              const label = `${pkg.replace(mod + '/', '')} — ${test}`;
+              const out   = lines.join('').trim().replace(/`/g, "'").slice(0, 3000);
+              return [
+                '<details>',
+                `<summary><code>${label}</code></summary>`,
+                '',
+                '```',
+                out,
+                '```',
+                '</details>',
+              ].join('\n');
+            });
+
+            // ── Compose body ────────────────────────────────────────────────
+            const headline  = anyFailed ? '## ❌ Tests Failed' : '## ✅ Tests Passed';
+            const summary   = [
+              `**${totalPass + totalFail + totalSkip}** tests run`,
+              `**${totalPass}** passed`,
+              `**${totalFail}** failed`,
+              `**${totalSkip}** skipped`,
+              `coverage **${totalCov}**`,
+              'race detector **on**',
+            ].join(' · ');
+
+            const parts = [
+              '<!-- bedrock-test-report -->',
+              headline,
+              '',
+              summary,
+              '',
+              '### Package Results',
+              '',
+              table,
+            ];
+
+            if (failSections.length > 0) {
+              parts.push('', '### Failures', '', ...failSections);
+            }
+
+            parts.push('', `<sub>Commit ${context.sha.slice(0, 7)} · ${new Date().toUTCString()}</sub>`);
+            const body = parts.join('\n');
+
+            // ── Post or update comment ──────────────────────────────────────
+            const marker = '<!-- bedrock-test-report -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      # Fail the workflow after the comment is posted so the PR is blocked.
+      - name: Enforce test pass
+        if: steps.tests.outputs.exit_code != '0'
+        run: |
+          echo "Tests failed — see the PR comment for details."
+          exit 1

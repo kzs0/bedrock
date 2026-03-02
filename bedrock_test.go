@@ -292,22 +292,31 @@ func TestStep(t *testing.T) {
 }
 
 func TestNoopBedrock(t *testing.T) {
-	// Context without bedrock should use noop
+	// Context without bedrock should use noop: zero allocations, same context returned.
 	ctx := context.Background()
-	op, ctx := Operation(ctx, "test")
+	op, ctx2 := Operation(ctx, "test")
 	defer op.Done()
 
-	state := operationStateFromContext(ctx)
-	if state == nil {
-		t.Fatal("expected operation state even with noop bedrock")
+	// Noop ops return the original context unchanged (no state injected).
+	if ctx2 != ctx {
+		t.Error("noop Operation should return the original context unchanged")
 	}
 
-	if !state.bedrock.isNoop {
-		t.Error("expected noop bedrock")
+	// The returned op is non-nil and safe to use.
+	if op == nil {
+		t.Fatal("noop Operation should return a non-nil *Op")
 	}
 
-	// Should not panic
-	op.Register(ctx, attr.String("key", "value"))
+	// All methods on a noop op must be safe (no panic).
+	op.Register(ctx2, attr.String("key", "value"))
+	op.Done()
+
+	step := Step(ctx, "test-step")
+	if step == nil {
+		t.Fatal("noop Step should return a non-nil *OpStep")
+	}
+	step.Register(ctx, attr.String("key", "value"))
+	step.Done()
 }
 
 func TestStaticAttributesInMetrics(t *testing.T) {

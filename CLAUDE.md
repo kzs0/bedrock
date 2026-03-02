@@ -118,7 +118,7 @@ Only attributes matching `MetricLabels()` become metric labels. Missing labels d
 Sources represent long-running processes (background workers, loops). They:
 - Prefix all child operation names automatically
 - Share attributes and metric labels with children
-- Track aggregate metrics (Sum, Gauge, Histogram)
+- Record aggregate metrics via typed methods (Sum, Gauge, Histogram)
 
 ```go
 source, ctx := bedrock.Source(ctx, "background.worker",
@@ -127,10 +127,9 @@ source, ctx := bedrock.Source(ctx, "background.worker",
 )
 defer source.Done()
 
-source.Aggregate(ctx,
-    attr.Sum("jobs_processed", 1),
-    attr.Gauge("queue_depth", 42),
-)
+source.Sum(ctx, "jobs_processed", 1)
+source.Gauge(ctx, "queue_depth", 42)
+source.Histogram(ctx, "latency_ms", 52.3)
 
 // Child operations inherit "background.worker." prefix
 op, ctx := bedrock.Operation(ctx, "process")
@@ -147,7 +146,7 @@ Steps are lightweight tracing spans for helper functions. They:
 ```go
 func helper(ctx context.Context) {
     step := bedrock.Step(ctx, "helper",
-        attr.String("key", "value"),
+        bedrock.Attrs(attr.String("key", "value")),
     )
     defer step.Done()
 
@@ -202,12 +201,12 @@ Options use interfaces for type safety:
 ```go
 // Common option (works on Operation and Step)
 func MyOption() commonOption {
-    return commonOption{...}
+    return commonOption{applyAttrs: attrs}
 }
 
-// Operation-only option
+// Operation-only option (discriminated struct — no closure alloc)
 func MyOpOption() operationOnlyOption {
-    return operationOnlyOption{fn: func(cfg *operationConfig) {...}}
+    return operationOnlyOption{kind: opOptMyKind, ...}
 }
 ```
 
@@ -675,8 +674,8 @@ When `RuntimeMetrics` is enabled (default), Go runtime metrics are collected via
 ### Operation Lifecycle
 
 1. **Start**: `Operation()` creates span, starts timer
-2. **During**: `Register()` adds attributes to span and operation state
-3. **End**: `Done()` finalizes span, records metrics (duration, success/failure)
+2. **During**: `Register()` accumulates attributes in operation state; `Event()` records trace events immediately on the span
+3. **End**: `Done()` bulk-syncs all accumulated attributes to the span, finalizes it, records metrics (duration, success/failure)
 4. **Export**: Span sent to OTLP exporter asynchronously
 
 ### Metric Label Resolution
@@ -882,7 +881,7 @@ func runWorker(ctx context.Context) error {
             return nil
         case <-ticker.C:
             loopCounter.Inc()
-            source.Aggregate(ctx, attr.Sum("jobs_processed", 1))
+            source.Sum(ctx, "jobs_processed", 1)
 
             // Operations inherit source prefix
             op, ctx := bedrock.Operation(ctx, "process_job")

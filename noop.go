@@ -16,6 +16,14 @@ var (
 	noopOnce     sync.Once
 )
 
+// globalNoopOp is a pre-allocated zero-cost Op for use when bedrock is uninitialized.
+// Op.Register, Op.Done, and Op.Event all guard against nil state, so this is safe.
+var globalNoopOp = &Op{}
+
+// globalNoopStep is a pre-allocated zero-cost OpStep for use when bedrock is uninitialized.
+// The noop=true flag causes Register and Done to return immediately.
+var globalNoopStep = &OpStep{noop: true}
+
 // noopBedrock returns a singleton no-op Bedrock instance that does nothing.
 // This is used when no Bedrock instance is found in the context.
 func noopBedrock() *Bedrock {

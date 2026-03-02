@@ -30,7 +30,7 @@ func DefaultBatchConfig() BatchProcessorConfig {
 // BatchProcessor batches spans before sending to an exporter.
 type BatchProcessor struct {
 	cfg      BatchProcessorConfig
-	exporter *Exporter
+	exporter trace.Exporter
 
 	mu      sync.Mutex
 	queue   []*trace.Span
@@ -40,7 +40,7 @@ type BatchProcessor struct {
 }
 
 // NewBatchProcessor creates a new batch processor.
-func NewBatchProcessor(exporter *Exporter, cfg BatchProcessorConfig) *BatchProcessor {
+func NewBatchProcessor(exporter trace.Exporter, cfg BatchProcessorConfig) *BatchProcessor {
 	if cfg.MaxQueueSize <= 0 {
 		cfg.MaxQueueSize = 2048
 	}
@@ -113,6 +113,15 @@ func (bp *BatchProcessor) exportLocked() {
 	go func() {
 		_ = bp.exporter.ExportSpans(context.Background(), spans)
 	}()
+}
+
+// ExportSpans implements the trace.Exporter interface by enqueuing spans for
+// batched export. This avoids spawning a goroutine per span.
+func (bp *BatchProcessor) ExportSpans(_ context.Context, spans []*trace.Span) error {
+	for _, s := range spans {
+		bp.EnqueueSpan(s)
+	}
+	return nil
 }
 
 // Shutdown stops the processor and exports remaining spans.

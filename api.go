@@ -30,7 +30,7 @@ type CounterWithStatic struct {
 }
 
 // With returns a CounterVec with the given label values plus static labels.
-func (c *CounterWithStatic) With(labels ...attr.Attr) *metric.CounterVec {
+func (c *CounterWithStatic) With(labels ...attr.Attr) metric.CounterVec {
 	allLabels := append(c.staticLabels, labels...)
 	return c.counter.With(allLabels...)
 }
@@ -52,7 +52,7 @@ type GaugeWithStatic struct {
 }
 
 // With returns a GaugeVec with the given label values plus static labels.
-func (g *GaugeWithStatic) With(labels ...attr.Attr) *metric.GaugeVec {
+func (g *GaugeWithStatic) With(labels ...attr.Attr) metric.GaugeVec {
 	allLabels := append(g.staticLabels, labels...)
 	return g.gauge.With(allLabels...)
 }
@@ -89,7 +89,7 @@ type HistogramWithStatic struct {
 }
 
 // With returns a HistogramVec with the given label values plus static labels.
-func (h *HistogramWithStatic) With(labels ...attr.Attr) *metric.HistogramVec {
+func (h *HistogramWithStatic) With(labels ...attr.Attr) metric.HistogramVec {
 	allLabels := append(h.staticLabels, labels...)
 	return h.histogram.With(allLabels...)
 }
@@ -177,6 +177,9 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 //	op.Register(ctx, attr.String("user_id", "123"))
 func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, context.Context) {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return globalNoopOp, ctx
+	}
 	cfg := applyOperationOptions(name, opts)
 
 	// Check for parent operation
@@ -184,13 +187,9 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 
 	// Check for source config and merge attributes/labels if present
 	if source := sourceConfigFromContext(ctx); source != nil {
-		// Merge source attributes
-		sourceAttrs := make([]attr.Attr, 0)
-		source.attrs.Range(func(a attr.Attr) bool {
-			sourceAttrs = append(sourceAttrs, a)
-			return true
-		})
-		cfg.attrs = append(sourceAttrs, cfg.attrs...)
+		// Prepend source attrs directly from the existing slice — no copy needed
+		// when cfg.attrs is nil (append returns source slice as-is).
+		cfg.attrs = append(source.attrs.Attrs(), cfg.attrs...)
 
 		// Use source metric labels if operation doesn't define any
 		if len(cfg.metricLabels) == 0 {
@@ -211,23 +210,14 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 		// Skip tracing, just pass through context with no-trace flag
 		newCtx = withNoTrace(ctx)
 	} else {
-		// Start trace span
-		var parentCtx context.Context
-		if parent != nil && parent.span != nil {
-			parentCtx = trace.ContextWithSpan(ctx, parent.span)
-		} else {
-			parentCtx = ctx
+		// Resolve local parent span (passed explicitly to avoid a context read).
+		var parentSpan *trace.Span
+		if parent != nil {
+			parentSpan = parent.span
 		}
-
-		// Build span options
-		spanOpts := []trace.StartSpanOption{trace.WithAttrs(cfg.attrs...)}
-
-		// Add remote parent if provided (from W3C Trace Context)
-		if cfg.remoteParent != nil && cfg.remoteParent.IsValid() {
-			spanOpts = append(spanOpts, trace.WithRemoteParent(*cfg.remoteParent))
-		}
-
-		newCtx, span = b.tracer.Start(parentCtx, cfg.name, spanOpts...)
+		// StartSpan avoids closure allocations: parent and remote parent are
+		// direct parameters; attrs are synced to span at Done() via SetAttrSet.
+		newCtx, span = b.tracer.StartSpan(ctx, cfg.name, parentSpan, cfg.remoteParent, cfg.attrs)
 	}
 
 	// Create operation state
@@ -248,7 +238,7 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 //	source, ctx := bedrock.Source(ctx, "background.worker")
 //	defer source.Done()
 //
-//	source.Aggregate(ctx, attr.Sum("loops", 1))
+//	source.Sum(ctx, "loops", 1)
 func Source(ctx context.Context, name string, opts ...SourceOption) (*Src, context.Context) {
 	cfg := applySourceOptions(name, opts)
 	ctx = withSourceConfig(ctx, &cfg)
@@ -279,36 +269,33 @@ func Step(ctx context.Context, name string, opts ...StepOption) *OpStep {
 	return StepFromContext(ctx, name, opts...)
 }
 
-// Register adds attributes or events to the operation.
+// Register adds attributes to the operation.
 // Attributes can be used for metrics if they match registered metric label names.
-// Events are recorded in traces.
 // Use attr.Error(err) to register errors and mark the operation as failed.
 //
 // Usage:
 //
 //	op.Register(ctx,
 //	    attr.String("user_id", "123"),
-//	    attr.NewEvent("cache.hit", attr.String("key", "user:123")),
 //	    attr.Error(err),  // marks as failure if err != nil
 //	)
-func (op *Op) Register(ctx context.Context, items ...attr.Registrable) {
-	attrs := make([]attr.Attr, 0)
-
-	for _, item := range items {
-		switch v := item.(type) {
-		case attr.Attr:
-			attrs = append(attrs, v)
-		case attr.Event:
-			// Register as trace event
-			if op.state.span != nil {
-				op.state.span.AddEvent(v.Name, v.Attrs...)
-			}
-		}
+func (op *Op) Register(ctx context.Context, attrs ...attr.Attr) {
+	if op.state == nil || len(attrs) == 0 {
+		return
 	}
+	op.state.setAttr(attrs...)
+}
 
-	if len(attrs) > 0 {
-		op.state.setAttr(attrs...)
+// Event records a trace event on the operation span.
+//
+// Usage:
+//
+//	op.Event(ctx, attr.NewEvent("cache.hit", attr.String("key", "user:123")))
+func (op *Op) Event(ctx context.Context, event attr.Event) {
+	if op.state == nil || op.state.span == nil {
+		return
 	}
+	op.state.span.AddEvent(event.Name, event.Attrs...)
 }
 
 // Done completes the operation and records all automatic metrics.
@@ -319,56 +306,55 @@ func (op *Op) Done() {
 	op.state.end()
 }
 
-// Aggregate records aggregated metrics for the source.
-// Sources typically track aggregates since they don't "complete" like operations.
-// Accepts Sum, Gauge, and Histogram aggregations.
+// Sum increments a named counter for the source by the given value.
 //
 // Usage:
 //
-//	source.Aggregate(ctx,
-//	    attr.Sum("requests", 1),
-//	    attr.Gauge("queue_depth", 42),
-//	    attr.Histogram("latency_ms", 123.45),
-//	)
-func (src *Src) Aggregate(ctx context.Context, items ...attr.Aggregation) {
+//	source.Sum(ctx, "jobs_processed", 1)
+func (src *Src) Sum(ctx context.Context, key string, value float64) {
 	if src.bedrock.isNoop {
 		return
 	}
-
-	for _, item := range items {
-		switch v := item.(type) {
-		case attr.SumAttr:
-			// Record as counter
-			counter := Counter(
-				ctx,
-				src.name+"_"+v.Key,
-				"Aggregated "+v.Key+" for "+src.name,
-			)
-			counter.Add(v.Value)
-		case attr.GaugeAttr:
-			// Record as gauge
-			gauge := Gauge(
-				ctx,
-				src.name+"_"+v.Key,
-				"Aggregated "+v.Key+" for "+src.name,
-			)
-			gauge.Set(v.Value)
-		case attr.HistogramAttr:
-			// Record as histogram
-			histogram := Histogram(
-				ctx,
-				src.name+"_"+v.Key,
-				"Aggregated "+v.Key+" for "+src.name,
-				nil, // use default buckets
-			)
-			histogram.Observe(v.Value)
-		}
-	}
+	counter := Counter(ctx, src.name+"_"+key, "Aggregated "+key+" for "+src.name)
+	counter.Add(value)
 }
 
-// Done is a no-op for sources (they don't complete).
+// Gauge sets a named gauge for the source to the given value.
+//
+// Usage:
+//
+//	source.Gauge(ctx, "queue_depth", 42)
+func (src *Src) Gauge(ctx context.Context, key string, value float64) {
+	if src.bedrock.isNoop {
+		return
+	}
+	gauge := Gauge(ctx, src.name+"_"+key, "Aggregated "+key+" for "+src.name)
+	gauge.Set(value)
+}
+
+// Histogram records a named histogram observation for the source.
+//
+// Usage:
+//
+//	source.Histogram(ctx, "latency_ms", 123.45)
+func (src *Src) Histogram(ctx context.Context, key string, value float64) {
+	if src.bedrock.isNoop {
+		return
+	}
+	histogram := Histogram(ctx, src.name+"_"+key, "Aggregated "+key+" for "+src.name, nil)
+	histogram.Observe(value)
+}
+
+// Done signals the source is stopping.
+// When LogCanonical is enabled it emits a structured completion log.
 func (src *Src) Done() {
-	// Sources don't complete, this is just for API consistency
+	if src.bedrock.isNoop || !src.bedrock.config.LogCanonical {
+		return
+	}
+	src.bedrock.logger.Info("source.complete",
+		"source", src.name,
+		"success", true,
+	)
 }
 
 // InitOption configures initialization.
@@ -410,10 +396,7 @@ func WithLogLevel(level string) InitOption {
 }
 
 func applyInitOptions(opts []InitOption) initConfig {
-	cfg := initConfig{
-		config:      nil,
-		staticAttrs: make([]attr.Attr, 0),
-	}
+	var cfg initConfig
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -431,27 +414,10 @@ func applyInitOptions(opts []InitOption) initConfig {
 //	counter.Inc() // automatically includes static labels
 func Counter(ctx context.Context, name, help string, labelNames ...string) *CounterWithStatic {
 	b := bedrockFromContext(ctx)
-
-	// Include static label names
-	staticLabelNames := make([]string, 0, b.staticAttr.Len())
-	b.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabelNames = append(staticLabelNames, a.Key)
-		return true
-	})
-
-	// Get static label values
-	staticLabels := make([]attr.Attr, 0, b.staticAttr.Len())
-	b.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabels = append(staticLabels, a)
-		return true
-	})
-
-	allLabelNames := append(staticLabelNames, labelNames...)
-	counter := b.metrics.Counter(name, help, allLabelNames...)
-
+	allLabelNames := append(b.staticLabelKeys, labelNames...)
 	return &CounterWithStatic{
-		counter:      counter,
-		staticLabels: staticLabels,
+		counter:      b.metrics.Counter(name, help, allLabelNames...),
+		staticLabels: b.staticLabelVals,
 	}
 }
 
@@ -464,27 +430,10 @@ func Counter(ctx context.Context, name, help string, labelNames ...string) *Coun
 //	gauge.Set(42) // automatically includes static labels
 func Gauge(ctx context.Context, name, help string, labelNames ...string) *GaugeWithStatic {
 	b := bedrockFromContext(ctx)
-
-	// Include static label names
-	staticLabelNames := make([]string, 0, b.staticAttr.Len())
-	b.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabelNames = append(staticLabelNames, a.Key)
-		return true
-	})
-
-	// Get static label values
-	staticLabels := make([]attr.Attr, 0, b.staticAttr.Len())
-	b.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabels = append(staticLabels, a)
-		return true
-	})
-
-	allLabelNames := append(staticLabelNames, labelNames...)
-	gauge := b.metrics.Gauge(name, help, allLabelNames...)
-
+	allLabelNames := append(b.staticLabelKeys, labelNames...)
 	return &GaugeWithStatic{
-		gauge:        gauge,
-		staticLabels: staticLabels,
+		gauge:        b.metrics.Gauge(name, help, allLabelNames...),
+		staticLabels: b.staticLabelVals,
 	}
 }
 
@@ -500,27 +449,10 @@ func Gauge(ctx context.Context, name, help string, labelNames ...string) *GaugeW
 //	hist.Observe(123.45) // automatically includes static labels
 func Histogram(ctx context.Context, name, help string, buckets []float64, labelNames ...string) *HistogramWithStatic {
 	b := bedrockFromContext(ctx)
-
-	// Include static label names
-	staticLabelNames := make([]string, 0, b.staticAttr.Len())
-	b.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabelNames = append(staticLabelNames, a.Key)
-		return true
-	})
-
-	// Get static label values
-	staticLabels := make([]attr.Attr, 0, b.staticAttr.Len())
-	b.staticAttr.Range(func(a attr.Attr) bool {
-		staticLabels = append(staticLabels, a)
-		return true
-	})
-
-	allLabelNames := append(staticLabelNames, labelNames...)
-	histogram := b.metrics.Histogram(name, help, buckets, allLabelNames...)
-
+	allLabelNames := append(b.staticLabelKeys, labelNames...)
 	return &HistogramWithStatic{
-		histogram:    histogram,
-		staticLabels: staticLabels,
+		histogram:    b.metrics.Histogram(name, help, buckets, allLabelNames...),
+		staticLabels: b.staticLabelVals,
 	}
 }
 
@@ -532,6 +464,9 @@ func Histogram(ctx context.Context, name, help string, buckets []float64, labelN
 //	bedrock.Debug(ctx, "processing request", attr.String("user_id", "123"))
 func Debug(ctx context.Context, msg string, attrs ...attr.Attr) {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return
+	}
 	b.logBridge.Debug(ctx, msg, attrs...)
 }
 
@@ -543,6 +478,9 @@ func Debug(ctx context.Context, msg string, attrs ...attr.Attr) {
 //	bedrock.Info(ctx, "request completed", attr.Int("status", 200))
 func Info(ctx context.Context, msg string, attrs ...attr.Attr) {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return
+	}
 	b.logBridge.Info(ctx, msg, attrs...)
 }
 
@@ -554,6 +492,9 @@ func Info(ctx context.Context, msg string, attrs ...attr.Attr) {
 //	bedrock.Warn(ctx, "high latency detected", attr.Duration("latency", 5*time.Second))
 func Warn(ctx context.Context, msg string, attrs ...attr.Attr) {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return
+	}
 	b.logBridge.Warn(ctx, msg, attrs...)
 }
 
@@ -565,6 +506,9 @@ func Warn(ctx context.Context, msg string, attrs ...attr.Attr) {
 //	bedrock.Error(ctx, "database connection failed", attr.Error(err))
 func Error(ctx context.Context, msg string, attrs ...attr.Attr) {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return
+	}
 	b.logBridge.Error(ctx, msg, attrs...)
 }
 
@@ -576,5 +520,8 @@ func Error(ctx context.Context, msg string, attrs ...attr.Attr) {
 //	bedrock.Log(ctx, slog.LevelInfo, "custom log", attr.String("key", "value"))
 func Log(ctx context.Context, level slog.Level, msg string, attrs ...attr.Attr) {
 	b := bedrockFromContext(ctx)
+	if b.isNoop {
+		return
+	}
 	b.logBridge.Log(ctx, level, msg, attrs...)
 }

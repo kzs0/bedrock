@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sync"
 
 	"github.com/kzs0/bedrock/attr"
 	blog "github.com/kzs0/bedrock/log"
@@ -11,6 +12,16 @@ import (
 	"github.com/kzs0/bedrock/trace"
 	"github.com/kzs0/bedrock/trace/otlp"
 )
+
+// cachedOpMetrics holds the pre-looked-up metric objects for a given operation name.
+// This avoids string concatenation and registry map lookups on every Done() call.
+type cachedOpMetrics struct {
+	count      *metric.Counter
+	success    *metric.Counter
+	failure    *metric.Counter
+	duration   *metric.Histogram
+	labelNames []string // static label keys + operation-specific metric label names
+}
 
 // Bedrock is the main entry point for observability.
 type Bedrock struct {
@@ -21,7 +32,16 @@ type Bedrock struct {
 	metrics    *metric.Registry
 	staticAttr attr.Set
 
-	exporter         *otlp.Exporter
+	// Cached slices of static label keys and values, computed once at init.
+	staticLabelKeys []string
+	staticLabelVals []attr.Attr
+
+	// Per-operation-name metric cache: avoids string allocs and map lookups on Done().
+	opMetricsCache sync.Map // map[string]*cachedOpMetrics
+
+	// rawExporter is the underlying span exporter (HTTP or gRPC). It may be nil.
+	// batchProcessor wraps rawExporter and is what the tracer actually calls.
+	rawExporter      trace.Exporter
 	batchProcessor   *otlp.BatchProcessor
 	runtimeCollector *metric.RuntimeCollector
 
@@ -45,6 +65,18 @@ func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 		config:     cfg,
 		staticAttr: attr.NewSet(staticAttrs...),
 		metrics:    metric.NewRegistry(cfg.MetricPrefix),
+	}
+
+	// Pre-build cached slices of static label keys and values (never change after init).
+	n := b.staticAttr.Len()
+	if n > 0 {
+		b.staticLabelKeys = make([]string, 0, n)
+		b.staticLabelVals = make([]attr.Attr, 0, n)
+		b.staticAttr.Range(func(a attr.Attr) bool {
+			b.staticLabelKeys = append(b.staticLabelKeys, a.Key)
+			b.staticLabelVals = append(b.staticLabelVals, a)
+			return true
+		})
 	}
 
 	// Setup logging
@@ -80,13 +112,25 @@ func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 	// Setup tracing
 	var exporter trace.Exporter
 	if cfg.TraceURL != "" {
-		b.exporter = otlp.NewExporter(otlp.ExporterConfig{
-			Endpoint:    cfg.TraceURL,
-			ServiceName: cfg.Service,
-			Resource:    b.staticAttr,
-		})
-		b.batchProcessor = otlp.NewBatchProcessor(b.exporter, otlp.DefaultBatchConfig())
-		exporter = b.exporter
+		if useGRPC(cfg) {
+			b.rawExporter = otlp.NewGRPCExporter(otlp.GRPCExporterConfig{
+				Endpoint:    cfg.TraceURL,
+				Insecure:    cfg.TraceInsecure,
+				ServiceName: cfg.Service,
+				Resource:    b.staticAttr,
+				Timeout:     cfg.ShutdownTimeout,
+			})
+		} else {
+			b.rawExporter = otlp.NewExporter(otlp.ExporterConfig{
+				Endpoint:    cfg.TraceURL,
+				ServiceName: cfg.Service,
+				Resource:    b.staticAttr,
+			})
+		}
+		b.batchProcessor = otlp.NewBatchProcessor(b.rawExporter, otlp.DefaultBatchConfig())
+		// Wire the batch processor as the tracer exporter so that span.End()
+		// enqueues into the batch processor rather than spawning a goroutine per span.
+		exporter = b.batchProcessor
 	}
 
 	sampler := cfg.TraceSampler
@@ -132,6 +176,11 @@ func (b *Bedrock) Metrics() *metric.Registry {
 	return b.metrics
 }
 
+// MetricsRegistry returns the metric registry (alias for Metrics).
+func (b *Bedrock) MetricsRegistry() *metric.Registry {
+	return b.metrics
+}
+
 // Tracer returns the tracer.
 func (b *Bedrock) Tracer() *trace.Tracer {
 	return b.tracer
@@ -142,10 +191,43 @@ func (b *Bedrock) IsNoop() bool {
 	return b.isNoop
 }
 
+// getOpMetrics returns the cached metric objects for the given operation name,
+// creating them on first use. This avoids string concatenation and registry
+// map lookups on the hot Done() path.
+func (b *Bedrock) getOpMetrics(name string, metricLabels []string) *cachedOpMetrics {
+	if v, ok := b.opMetricsCache.Load(name); ok {
+		return v.(*cachedOpMetrics)
+	}
+
+	// Build combined label names: static + operation-specific.
+	allLabels := make([]string, len(b.staticLabelKeys)+len(metricLabels))
+	copy(allLabels, b.staticLabelKeys)
+	copy(allLabels[len(b.staticLabelKeys):], metricLabels)
+
+	cm := &cachedOpMetrics{
+		count:      b.metrics.Counter(name+"_count", "Total count of "+name+" operations", allLabels...),
+		success:    b.metrics.Counter(name+"_successes", "Successful "+name+" operations", allLabels...),
+		failure:    b.metrics.Counter(name+"_failures", "Failed "+name+" operations", allLabels...),
+		duration:   b.metrics.Histogram(name+"_duration_ms", "Duration of "+name+" operations in milliseconds", nil, allLabels...),
+		labelNames: allLabels,
+	}
+
+	// Store with LoadOrStore to handle concurrent first calls.
+	if actual, loaded := b.opMetricsCache.LoadOrStore(name, cm); loaded {
+		return actual.(*cachedOpMetrics)
+	}
+	return cm
+}
+
 // Shutdown gracefully shuts down all components.
 func (b *Bedrock) Shutdown(ctx context.Context) error {
 	if b.batchProcessor != nil {
 		if err := b.batchProcessor.Shutdown(ctx); err != nil {
+			return err
+		}
+	}
+	if b.rawExporter != nil {
+		if err := b.rawExporter.Shutdown(ctx); err != nil {
 			return err
 		}
 	}
