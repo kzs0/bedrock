@@ -193,7 +193,7 @@ func TestServe_And_Shutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /health: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "ok" {
 		t.Errorf("body: got %q, want ok", string(body))
