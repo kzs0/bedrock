@@ -37,7 +37,7 @@ func TestTraceID_String(t *testing.T) {
 	}
 	// Verify it's valid hex
 	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			t.Errorf("invalid hex character %c in trace ID string", c)
 		}
 	}
@@ -50,7 +50,7 @@ func TestSpanID_String(t *testing.T) {
 		t.Errorf("expected 16-char hex string, got %d chars: %q", len(s), s)
 	}
 	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			t.Errorf("invalid hex character %c in span ID string", c)
 		}
 	}

@@ -104,7 +104,7 @@ func TestExporter_ExportSpans_WithHeaders(t *testing.T) {
 func TestExporter_ExportSpans_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("internal error"))
+		_, _ = w.Write([]byte("internal error"))
 	}))
 	defer srv.Close()
 

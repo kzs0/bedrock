@@ -92,7 +92,7 @@ func TestListenAndServe_Method(t *testing.T) {
 		t.Fatalf("Listen error: %v", err)
 	}
 	addr := ln.Addr().String()
-	ln.Close() // Free the port
+	_ = ln.Close() // Free the port
 
 	cfg := Config{
 		Addr:          addr,

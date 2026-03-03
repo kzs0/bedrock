@@ -585,7 +585,7 @@ func TestResponseWriter_Write(t *testing.T) {
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Call Write without calling WriteHeader first — should auto-set 200
-		w.Write([]byte("hello"))
+		_, _ = w.Write([]byte("hello"))
 	})
 
 	wrapped := HTTPMiddleware(ctx, handler)
@@ -867,9 +867,9 @@ func TestDetectAWSWithBase(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/latest/meta-data/instance-id":
-			w.Write([]byte("i-1234567890abcdef0"))
+			_, _ = w.Write([]byte("i-1234567890abcdef0"))
 		case "/latest/meta-data/placement/region":
-			w.Write([]byte("us-east-1"))
+			_, _ = w.Write([]byte("us-east-1"))
 		default:
 			w.WriteHeader(404)
 		}
@@ -913,9 +913,9 @@ func TestDetectGCPWithBase(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/computeMetadata/v1/instance/id":
-			w.Write([]byte("1234567890"))
+			_, _ = w.Write([]byte("1234567890"))
 		case "/computeMetadata/v1/instance/zone":
-			w.Write([]byte("projects/123/zones/us-central1-a"))
+			_, _ = w.Write([]byte("projects/123/zones/us-central1-a"))
 		default:
 			w.WriteHeader(404)
 		}

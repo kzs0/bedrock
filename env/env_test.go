@@ -121,8 +121,9 @@ func TestSetValue_InvalidFloat(t *testing.T) {
 }
 
 func TestLoadField_Required(t *testing.T) {
-	// Unset env var
-	os.Unsetenv("TEST_REQUIRED_FIELD")
+	// Register cleanup, then unset for the test
+	t.Setenv("TEST_REQUIRED_FIELD", "")
+	_ = os.Unsetenv("TEST_REQUIRED_FIELD")
 	v := reflect.New(reflect.TypeOf("")).Elem()
 	err := loadField(v, "TEST_REQUIRED_FIELD", tag{Required: true})
 	if err == nil {
@@ -131,7 +132,8 @@ func TestLoadField_Required(t *testing.T) {
 }
 
 func TestLoadField_NotEmpty(t *testing.T) {
-	os.Unsetenv("TEST_NOTEMPTY_FIELD")
+	t.Setenv("TEST_NOTEMPTY_FIELD", "")
+	_ = os.Unsetenv("TEST_NOTEMPTY_FIELD")
 	v := reflect.New(reflect.TypeOf("")).Elem()
 	err := loadField(v, "TEST_NOTEMPTY_FIELD", tag{NotEmpty: true})
 	if err == nil {
@@ -140,7 +142,8 @@ func TestLoadField_NotEmpty(t *testing.T) {
 }
 
 func TestLoadField_Default(t *testing.T) {
-	os.Unsetenv("TEST_DEFAULT_FIELD")
+	t.Setenv("TEST_DEFAULT_FIELD", "")
+	_ = os.Unsetenv("TEST_DEFAULT_FIELD")
 	v := reflect.New(reflect.TypeOf("")).Elem()
 	err := loadField(v, "TEST_DEFAULT_FIELD", tag{Default: "default_val"})
 	if err != nil {
@@ -152,8 +155,7 @@ func TestLoadField_Default(t *testing.T) {
 }
 
 func TestLoadField_EnvVar(t *testing.T) {
-	os.Setenv("TEST_ENV_VAR", "hello")
-	defer os.Unsetenv("TEST_ENV_VAR")
+	t.Setenv("TEST_ENV_VAR", "hello")
 
 	v := reflect.New(reflect.TypeOf("")).Elem()
 	err := loadField(v, "TEST_ENV_VAR", tag{})

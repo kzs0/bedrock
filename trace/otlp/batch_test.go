@@ -53,7 +53,7 @@ func TestNewBatchProcessor_Defaults(t *testing.T) {
 		t.Errorf("expected default BatchTimeout 5s, got %v", bp.cfg.BatchTimeout)
 	}
 
-	bp.Shutdown(context.Background())
+	_ = bp.Shutdown(context.Background())
 }
 
 func TestBatchProcessor_EnqueueSpan(t *testing.T) {
@@ -80,7 +80,7 @@ func TestBatchProcessor_EnqueueSpan(t *testing.T) {
 		t.Error("expected batch export after reaching BatchSize")
 	}
 
-	bp.Shutdown(context.Background())
+	_ = bp.Shutdown(context.Background())
 }
 
 func TestBatchProcessor_FlushOnTimeout(t *testing.T) {
@@ -103,7 +103,7 @@ func TestBatchProcessor_FlushOnTimeout(t *testing.T) {
 		t.Error("expected flush after BatchTimeout")
 	}
 
-	bp.Shutdown(context.Background())
+	_ = bp.Shutdown(context.Background())
 }
 
 func TestBatchProcessor_ExportSpans(t *testing.T) {
@@ -127,7 +127,7 @@ func TestBatchProcessor_ExportSpans(t *testing.T) {
 		t.Fatalf("ExportSpans error: %v", err)
 	}
 
-	bp.Shutdown(context.Background())
+	_ = bp.Shutdown(context.Background())
 }
 
 func TestBatchProcessor_Shutdown_FlushesRemaining(t *testing.T) {
@@ -178,7 +178,7 @@ func TestBatchProcessor_EnqueueAfterShutdown(t *testing.T) {
 		BatchTimeout: time.Second,
 	})
 
-	bp.Shutdown(context.Background())
+	_ = bp.Shutdown(context.Background())
 
 	tracer := trace.NewTracer(trace.TracerConfig{ServiceName: "test"})
 	_, span := tracer.Start(context.Background(), "test")
@@ -205,5 +205,5 @@ func TestBatchProcessor_QueueOverflow(t *testing.T) {
 	}
 
 	// Should not panic, oldest should be dropped
-	bp.Shutdown(context.Background())
+	_ = bp.Shutdown(context.Background())
 }

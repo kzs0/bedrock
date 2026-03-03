@@ -28,7 +28,7 @@ func TestRoundTrip_WithTracer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RoundTrip error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
@@ -53,7 +53,7 @@ func TestRoundTrip_WithoutTracer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RoundTrip error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
@@ -125,7 +125,7 @@ func TestRoundTrip_SetsAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RoundTrip error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != 404 {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
