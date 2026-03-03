@@ -295,7 +295,7 @@ func TestInstrumentedTransport_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RoundTrip error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
@@ -314,7 +314,7 @@ func TestInstrumentedTransport_RoundTrip_NoBedrock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RoundTrip error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 // ── Get with invalid URL (client.go: Get 75% coverage) ─────────────────────

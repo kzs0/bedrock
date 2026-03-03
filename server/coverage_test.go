@@ -110,7 +110,7 @@ func TestListenAndServe_Method(t *testing.T) {
 	for time.Now().Before(deadline) {
 		resp, getErr := http.Get("http://" + addr + "/health")
 		if getErr == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode == 200 {
 				break
 			}

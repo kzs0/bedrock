@@ -514,8 +514,16 @@ go test ./...
 # Run tests with race detection
 go test -race ./...
 
+# Run linter (must pass before pushing — matches CI)
+golangci-lint run --timeout=5m ./...
+
 # Run example
 go run example/main.go
+```
+
+**After making any code changes, always run both tests and the linter before committing:**
+```bash
+go test ./... && golangci-lint run --timeout=5m ./...
 ```
 
 **Key test files:**
