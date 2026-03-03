@@ -50,7 +50,7 @@ func TestListenAndServe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("health check error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("expected health 200, got %d", resp.StatusCode)
 	}
@@ -60,7 +60,7 @@ func TestListenAndServe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ready check error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("expected ready 200, got %d", resp.StatusCode)
 	}
@@ -70,7 +70,7 @@ func TestListenAndServe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("metrics error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("expected metrics 200, got %d", resp.StatusCode)
 	}
