@@ -106,7 +106,10 @@ func TestDecodeHuffman_CommonStrings(t *testing.T) {
 }
 
 func TestParseGRPCStatus(t *testing.T) {
-	tests := []struct{ s string; want int }{
+	tests := []struct {
+		s    string
+		want int
+	}{
 		{"0", 0},
 		{"1", 1},
 		{"13", 13},
@@ -123,14 +126,14 @@ func TestParseGRPCStatus(t *testing.T) {
 
 func TestDecodeHpackInt(t *testing.T) {
 	tests := []struct {
-		block       []byte
-		prefixBits  int
-		wantVal     uint64
-		wantN       int
+		block      []byte
+		prefixBits int
+		wantVal    uint64
+		wantN      int
 	}{
-		{[]byte{0x05}, 4, 5, 1},            // simple 4-bit: 0000 0101 & 0xf = 5
-		{[]byte{0x0f, 0x01}, 4, 16, 2},     // overflow: 15 + 1 = 16
-		{[]byte{0x83}, 7, 3, 1},            // 7-bit prefix: 0x83 & 0x7f = 3
+		{[]byte{0x05}, 4, 5, 1},        // simple 4-bit: 0000 0101 & 0xf = 5
+		{[]byte{0x0f, 0x01}, 4, 16, 2}, // overflow: 15 + 1 = 16
+		{[]byte{0x83}, 7, 3, 1},        // 7-bit prefix: 0x83 & 0x7f = 3
 	}
 	for _, tt := range tests {
 		val, n := decodeHpackInt(tt.block, tt.prefixBits)
