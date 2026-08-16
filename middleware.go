@@ -1,8 +1,11 @@
 package bedrock
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 
 	"github.com/kzs0/bedrock/attr"
@@ -79,7 +82,7 @@ func HTTPMiddleware(ctx context.Context, handler http.Handler, opts ...Middlewar
 		}
 
 		// Call next handler with operation context
-		handler.ServeHTTP(rw, r.WithContext(opCtx))
+		handler.ServeHTTP(wrapResponseWriter(rw), r.WithContext(opCtx))
 
 		// Add status code as attribute
 		op.Register(opCtx, attr.Int("http.status_code", rw.status))
@@ -185,4 +188,246 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 		rw.WriteHeader(http.StatusOK)
 	}
 	return rw.ResponseWriter.Write(b)
+}
+
+// Unwrap exposes the underlying writer to http.ResponseController.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
+type flushErrorWriter interface {
+	FlushError() error
+}
+
+type responseFlusher struct {
+	base         *responseWriter
+	flushErrorer flushErrorWriter
+	flusher      http.Flusher
+}
+
+func (f *responseFlusher) Flush() {
+	_ = f.FlushError()
+}
+
+func (f *responseFlusher) FlushError() error {
+	if f.flushErrorer != nil {
+		err := f.flushErrorer.FlushError()
+		if err == nil && !f.base.wroteHeader {
+			// FlushError has already committed the underlying response. Capture
+			// the implicit status without writing a duplicate header.
+			f.base.status = http.StatusOK
+			f.base.wroteHeader = true
+		}
+		return err
+	}
+	if !f.base.wroteHeader {
+		f.base.WriteHeader(http.StatusOK)
+	}
+	f.flusher.Flush()
+	return nil
+}
+
+type responseHijacker struct {
+	hijacker http.Hijacker
+}
+
+func (h *responseHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return h.hijacker.Hijack()
+}
+
+type responsePusher struct {
+	pusher http.Pusher
+}
+
+func (p *responsePusher) Push(target string, opts *http.PushOptions) error {
+	return p.pusher.Push(target, opts)
+}
+
+type responseReaderFrom struct {
+	base       *responseWriter
+	readerFrom io.ReaderFrom
+}
+
+func (rf *responseReaderFrom) ReadFrom(r io.Reader) (int64, error) {
+	if !rf.base.wroteHeader {
+		rf.base.WriteHeader(http.StatusOK)
+	}
+	return rf.readerFrom.ReadFrom(r)
+}
+
+// findResponseCapability follows the same Unwrap convention as
+// http.ResponseController so nested wrappers retain their capabilities.
+func findResponseCapability[T any](w http.ResponseWriter) (T, bool) {
+	var zero T
+	for w != nil {
+		if capability, ok := any(w).(T); ok {
+			return capability, true
+		}
+		unwrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return zero, false
+		}
+		w = unwrapper.Unwrap()
+	}
+	return zero, false
+}
+
+// findResponseFlushCapability walks one layer at a time, matching
+// ResponseController precedence: FlushError, then Flusher, then Unwrap.
+func findResponseFlushCapability(w http.ResponseWriter) (flushErrorWriter, http.Flusher, bool) {
+	for w != nil {
+		if flushErrorer, ok := w.(flushErrorWriter); ok {
+			return flushErrorer, nil, true
+		}
+		if flusher, ok := w.(http.Flusher); ok {
+			return nil, flusher, true
+		}
+		unwrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return nil, nil, false
+		}
+		w = unwrapper.Unwrap()
+	}
+	return nil, nil, false
+}
+
+// wrapResponseWriter exposes exactly the optional capabilities supported by
+// the underlying writer chain. This keeps legacy interface assertions honest
+// while the embedded responseWriter preserves status capture and Unwrap.
+func wrapResponseWriter(base *responseWriter) http.ResponseWriter {
+	flushErrorer, flusher, hasFlush := findResponseFlushCapability(base.ResponseWriter)
+	hijacker, hasHijacker := findResponseCapability[http.Hijacker](base.ResponseWriter)
+	// Pusher and ReaderFrom are not ResponseController capabilities. Preserve
+	// only the immediate writer's interfaces so intermediate wrappers are not
+	// bypassed when pushing or copying a response body.
+	pusher, hasPusher := base.ResponseWriter.(http.Pusher)
+	readerFrom, hasReaderFrom := base.ResponseWriter.(io.ReaderFrom)
+
+	var flush *responseFlusher
+	if hasFlush {
+		flush = &responseFlusher{base: base, flushErrorer: flushErrorer, flusher: flusher}
+	}
+	var hijack *responseHijacker
+	if hasHijacker {
+		hijack = &responseHijacker{hijacker: hijacker}
+	}
+	var push *responsePusher
+	if hasPusher {
+		push = &responsePusher{pusher: pusher}
+	}
+	var readFrom *responseReaderFrom
+	if hasReaderFrom {
+		readFrom = &responseReaderFrom{base: base, readerFrom: readerFrom}
+	}
+
+	capabilities := 0
+	if flush != nil {
+		capabilities |= 1
+	}
+	if hijack != nil {
+		capabilities |= 2
+	}
+	if push != nil {
+		capabilities |= 4
+	}
+	if readFrom != nil {
+		capabilities |= 8
+	}
+
+	switch capabilities {
+	case 0:
+		return base
+	case 1:
+		return struct {
+			*responseWriter
+			*responseFlusher
+		}{base, flush}
+	case 2:
+		return struct {
+			*responseWriter
+			*responseHijacker
+		}{base, hijack}
+	case 3:
+		return struct {
+			*responseWriter
+			*responseFlusher
+			*responseHijacker
+		}{base, flush, hijack}
+	case 4:
+		return struct {
+			*responseWriter
+			*responsePusher
+		}{base, push}
+	case 5:
+		return struct {
+			*responseWriter
+			*responseFlusher
+			*responsePusher
+		}{base, flush, push}
+	case 6:
+		return struct {
+			*responseWriter
+			*responseHijacker
+			*responsePusher
+		}{base, hijack, push}
+	case 7:
+		return struct {
+			*responseWriter
+			*responseFlusher
+			*responseHijacker
+			*responsePusher
+		}{base, flush, hijack, push}
+	case 8:
+		return struct {
+			*responseWriter
+			*responseReaderFrom
+		}{base, readFrom}
+	case 9:
+		return struct {
+			*responseWriter
+			*responseFlusher
+			*responseReaderFrom
+		}{base, flush, readFrom}
+	case 10:
+		return struct {
+			*responseWriter
+			*responseHijacker
+			*responseReaderFrom
+		}{base, hijack, readFrom}
+	case 11:
+		return struct {
+			*responseWriter
+			*responseFlusher
+			*responseHijacker
+			*responseReaderFrom
+		}{base, flush, hijack, readFrom}
+	case 12:
+		return struct {
+			*responseWriter
+			*responsePusher
+			*responseReaderFrom
+		}{base, push, readFrom}
+	case 13:
+		return struct {
+			*responseWriter
+			*responseFlusher
+			*responsePusher
+			*responseReaderFrom
+		}{base, flush, push, readFrom}
+	case 14:
+		return struct {
+			*responseWriter
+			*responseHijacker
+			*responsePusher
+			*responseReaderFrom
+		}{base, hijack, push, readFrom}
+	default:
+		return struct {
+			*responseWriter
+			*responseFlusher
+			*responseHijacker
+			*responsePusher
+			*responseReaderFrom
+		}{base, flush, hijack, push, readFrom}
+	}
 }

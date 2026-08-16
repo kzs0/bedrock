@@ -415,7 +415,7 @@ histogram.Observe(100)  // Uses static labels only
 
 **Endpoints:**
 - `/metrics` - Prometheus exposition format
-- `/debug/pprof/*` - Go profiling endpoints (cpu, heap, goroutine, etc.)
+- `/debug/pprof/*` - Go profiling endpoints when explicitly enabled (cpu, heap, goroutine, etc.)
 - `/health` - Health check
 
 **Auto-start** (if enabled in config):
@@ -423,11 +423,14 @@ histogram.Observe(100)  // Uses static labels only
 ```go
 ctx, close := bedrock.Init(ctx, bedrock.WithConfig(bedrock.Config{
     ServerEnabled: true,
-    ServerAddr:    ":9090",
+    ServerAddr:    "127.0.0.1:9090",
+    ServerPprof:   false,
 }))
 ```
 
 **Production Security Defaults:**
+- Address: 127.0.0.1:9090 (loopback only)
+- Pprof: disabled (explicit opt-in)
 - ReadTimeout: 10s
 - ReadHeaderTimeout: 5s (Slowloris protection)
 - WriteTimeout: 30s
@@ -449,9 +452,9 @@ ctx, close := bedrock.Init(ctx, bedrock.WithConfig(bedrock.Config{
 | `BEDROCK_METRIC_PREFIX` | string | - | Prefix for all metric names |
 | `BEDROCK_METRIC_BUCKETS` | string | - | Histogram buckets (comma-separated) |
 | `BEDROCK_SERVER_ENABLED` | bool | `true` | Auto-start observability server |
-| `BEDROCK_SERVER_ADDR` | string | `:9090` | Server listen address |
+| `BEDROCK_SERVER_ADDR` | string | `127.0.0.1:9090` | Loopback-only server listen address |
 | `BEDROCK_SERVER_METRICS` | bool | `true` | Enable /metrics endpoint |
-| `BEDROCK_SERVER_PPROF` | bool | `true` | Enable /debug/pprof endpoints |
+| `BEDROCK_SERVER_PPROF` | bool | `false` | Enable /debug/pprof endpoints |
 | `BEDROCK_SERVER_READ_TIMEOUT` | duration | `10s` | HTTP read timeout |
 | `BEDROCK_SERVER_READ_HEADER_TIMEOUT` | duration | `5s` | HTTP header read timeout |
 | `BEDROCK_SERVER_WRITE_TIMEOUT` | duration | `30s` | HTTP write timeout |
@@ -471,7 +474,8 @@ cfg := bedrock.Config{
     LogCanonical:    true,
     MetricPrefix:    "myapp",
     ServerEnabled:   true,
-    ServerAddr:      ":9090",
+    ServerAddr:      "127.0.0.1:9090",
+    ServerPprof:     false,
     ShutdownTimeout: 30 * time.Second,
 }
 
@@ -955,6 +959,10 @@ resp, err := bedrock.Post(ctx, "https://api.example.com/users",
 ## Full-Stack Observability
 
 **Location**: `example/fullstack/`
+
+The Compose example explicitly overrides the safe library defaults with
+`BEDROCK_SERVER_ADDR=0.0.0.0:9090` and `BEDROCK_SERVER_PPROF=true` so Prometheus
+and Pyroscope can access the app across its isolated container network.
 
 ### Stack Components
 

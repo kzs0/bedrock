@@ -632,10 +632,10 @@ BEDROCK_METRIC_BUCKETS=5,10,25,50,100,250,500,1000  # Custom buckets (ms)
 BEDROCK_RUNTIME_METRICS=true   # Enable Go runtime metrics collection
 
 # Server (observability endpoints)
-BEDROCK_SERVER_ENABLED=false   # Auto-start server
-BEDROCK_SERVER_ADDR=:9090      # Server address
+BEDROCK_SERVER_ENABLED=true    # Auto-start server
+BEDROCK_SERVER_ADDR=127.0.0.1:9090  # Loopback-only by default
 BEDROCK_SERVER_METRICS=true    # Enable /metrics
-BEDROCK_SERVER_PPROF=true      # Enable /debug/pprof
+BEDROCK_SERVER_PPROF=false     # Enable /debug/pprof only when explicitly needed
 BEDROCK_SERVER_READ_TIMEOUT=10s
 BEDROCK_SERVER_READ_HEADER_TIMEOUT=5s
 BEDROCK_SERVER_WRITE_TIMEOUT=30s
@@ -659,13 +659,16 @@ cfg := bedrock.Config{
     MetricPrefix:    "myapp",
     RuntimeMetrics:  true,
     ServerEnabled:   true,
-    ServerAddr:      ":9090",
+    ServerAddr:      "127.0.0.1:9090",
+    ServerPprof:     false,
     ShutdownTimeout: 30 * time.Second,
 }
 
 ctx, close := bedrock.Init(ctx, bedrock.WithConfig(cfg))
 defer close()
 ```
+
+> **Compatibility note:** The observability server now defaults to `127.0.0.1:9090` with pprof disabled. Containers or hosts that require remote scraping must explicitly configure a non-loopback address and opt in to pprof if needed. `Init` also fails fast (panics) when implicit `BEDROCK_*` configuration is malformed instead of silently replacing it with defaults.
 
 **Config Parsing**: Use `env.Parse[T]()` to parse custom config structs from environment variables:
 
@@ -691,7 +694,7 @@ defer close()
 
 Bedrock provides production-ready security defaults to protect against DoS attacks and resource exhaustion.
 
-**Observability Server** (metrics/pprof endpoints):
+**Observability Server** (metrics, health, and optional pprof endpoints):
 
 ```go
 import "github.com/kzs0/bedrock/server"
@@ -706,6 +709,8 @@ go obsServer.ListenAndServe()
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
+| `Addr` | `127.0.0.1:9090` | Limits access to the local host |
+| `EnablePprof` | `false` | Avoids exposing process profiles unless explicitly enabled |
 | `ReadTimeout` | 10s | Maximum time to read entire request (including body) |
 | `ReadHeaderTimeout` | 5s | **Slowloris attack protection** - limits header reading time |
 | `WriteTimeout` | 30s | Maximum time to write response |
@@ -724,13 +729,15 @@ go obsServer.ListenAndServe()
 
 **Custom Configuration**:
 
-Override defaults for specific requirements:
+Override defaults for specific requirements. The wildcard bind and pprof below
+are explicit opt-ins suitable only when network access is intentionally controlled
+(for example, inside a container network):
 
 ```go
 import "github.com/kzs0/bedrock/server"
 
 obsServer := server.New(b.Metrics(), server.Config{
-    Addr:              ":9090",
+    Addr:              "0.0.0.0:9090",
     EnableMetrics:     true,
     EnablePprof:       true,
     ReadTimeout:       5 * time.Second,
@@ -842,19 +849,16 @@ defer close()
 ### HTTP Service
 
 ```go
-import "github.com/kzs0/bedrock/server"
-
 func main() {
-    ctx, close := bedrock.Init(context.Background())
+    cfg := bedrock.DefaultConfig()
+    // cfg.ServerPprof = true // Explicitly opt in if local profiling is needed.
+    ctx, close := bedrock.Init(context.Background(), bedrock.WithConfig(cfg))
     defer close()
 
-    // Start observability server
-    b := bedrock.FromContext(ctx)
-    obsServer := server.New(b.Metrics(), server.DefaultConfig())
-    go obsServer.ListenAndServe()
+    // The observability server starts automatically on loopback.
     // Metrics: http://localhost:9090/metrics
     // Health:  http://localhost:9090/health
-    // Pprof:   http://localhost:9090/debug/pprof/
+    // Pprof is disabled by default.
 
     // Setup application server
     mux := http.NewServeMux()
@@ -1171,14 +1175,16 @@ process_user_duration_ms_count{user_id="123",status="active",env="production"} 1
 
 **Observability Server**:
 
-The observability server provides metrics, profiling, and health check endpoints:
+The observability server provides metrics and health checks by default. Profiling
+endpoints are available only when `EnablePprof` is explicitly enabled:
 
 ```go
 import "github.com/kzs0/bedrock/server"
 
 b := bedrock.FromContext(ctx)
 obsServer := server.New(b.Metrics(), server.Config{
-    Addr:          ":9090",
+    // Wildcard binding and pprof are explicit opt-ins for controlled networks.
+    Addr:          "0.0.0.0:9090",
     EnableMetrics: true,
     EnablePprof:   true,
 })
@@ -1223,6 +1229,10 @@ curl http://localhost:9090/health
 ## Full-Stack Observability
 
 Bedrock includes a complete observability stack example with Docker Compose:
+
+The Compose app explicitly binds its observability server to `0.0.0.0:9090`
+and enables pprof so Prometheus and Pyroscope can reach it across the container
+network. These are example-specific opt-ins, not library defaults.
 
 **Location**: `/example/fullstack/`
 

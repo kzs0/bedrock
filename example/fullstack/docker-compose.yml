@@ -15,6 +15,9 @@ services:
       - TRACE_SAMPLE_RATE=1.0
       - CANONICAL_LOG=true
       - LOOP_TERM=5s
+      # Opt in to cross-container access and profiling; library defaults are loopback-only with pprof disabled.
+      - BEDROCK_SERVER_ADDR=0.0.0.0:9090
+      - BEDROCK_SERVER_PPROF=true
     depends_on:
       jaeger:
         condition: service_started

@@ -66,12 +66,12 @@ type Config struct {
 	// Server configuration
 	// ServerEnabled enables the automatic observability server.
 	ServerEnabled bool `env:"BEDROCK_SERVER_ENABLED" envDefault:"true"`
-	// ServerAddr is the address to listen on.
-	ServerAddr string `env:"BEDROCK_SERVER_ADDR" envDefault:":9090"`
+	// ServerAddr is the address to listen on. It defaults to loopback only.
+	ServerAddr string `env:"BEDROCK_SERVER_ADDR" envDefault:"127.0.0.1:9090"`
 	// ServerMetrics enables /metrics endpoint.
 	ServerMetrics bool `env:"BEDROCK_SERVER_METRICS" envDefault:"true"`
 	// ServerPprof enables /debug/pprof endpoints.
-	ServerPprof bool `env:"BEDROCK_SERVER_PPROF" envDefault:"true"`
+	ServerPprof bool `env:"BEDROCK_SERVER_PPROF" envDefault:"false"`
 	// ServerReadTimeout is the max request read duration.
 	ServerReadTimeout time.Duration `env:"BEDROCK_SERVER_READ_TIMEOUT" envDefault:"10s"`
 	// ServerReadHeaderTimeout is the header read timeout.
@@ -98,9 +98,9 @@ func DefaultConfig() Config {
 		LogCanonical:            false,
 		RuntimeMetrics:          true,
 		ServerEnabled:           true,
-		ServerAddr:              ":9090",
+		ServerAddr:              "127.0.0.1:9090",
 		ServerMetrics:           true,
-		ServerPprof:             true,
+		ServerPprof:             false,
 		ServerReadTimeout:       10 * time.Second,
 		ServerReadHeaderTimeout: 5 * time.Second,
 		ServerWriteTimeout:      30 * time.Second,
