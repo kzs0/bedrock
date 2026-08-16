@@ -36,14 +36,15 @@ make ci
 Run `gofmt -w <changed-go-files>` and `go mod tidy` first; neither command
 should leave unrelated changes. `make ci` checks formatting, vet, lint, ordinary
 and race-enabled tests, 80% aggregate coverage, the nested `bench` module, and
-known vulnerabilities in both modules. Run the aggregate target with Go 1.25,
-which is required by the pinned vulnerability scanner; CI separately verifies
-that the library builds and tests at its Go 1.24 baseline.
+known vulnerabilities in both modules. Run the aggregate target with Go 1.26
+for CI-equivalent results; the pinned vulnerability scanner requires at least
+Go 1.25. CI separately verifies that the library builds and tests at its Go
+1.24 baseline.
 
-GitHub Actions builds and tests on Go 1.24 and 1.25. Separate Go 1.24 jobs run
+GitHub Actions builds and tests on Go 1.24 and 1.26. Separate Go 1.24 jobs run
 the race detector, coverage gate, formatting, vet, lint, and `bench` module
-tests; vulnerability scanning runs on Go 1.25 because the pinned scanner
-requires it.
+tests; vulnerability scanning and tagged-release verification run on the
+current patched Go 1.26 toolchain.
 
 ## Compatibility
 

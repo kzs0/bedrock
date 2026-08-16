@@ -520,15 +520,16 @@ make ci
 go run example/main.go
 ```
 
-Run the aggregate `make ci` target with Go 1.25 because the pinned vulnerability
-scanner requires it; library code must remain compatible with Go 1.24.
+Run the aggregate `make ci` target with Go 1.26 for CI-equivalent results. The
+pinned vulnerability scanner requires at least Go 1.25; library code must
+remain compatible with Go 1.24.
 
-CI builds and runs ordinary tests on Go 1.24 and 1.25. Go 1.24 lanes enforce the
+CI builds and runs ordinary tests on Go 1.24 and 1.26. Go 1.24 lanes enforce the
 race detector, 80% aggregate coverage, formatting, vet, lint, and nested `bench`
-module checks; vulnerability scanning uses Go 1.25. Prefer deterministic
-channels, barriers, and test servers over sleeps. Repeat concurrency-sensitive
-tests with `-count=N`, and use caller-controlled contexts for cancellation and
-shutdown tests.
+module checks; vulnerability scanning and tagged-release verification use the
+current patched Go 1.26 toolchain. Prefer deterministic channels, barriers, and
+test servers over sleeps. Repeat concurrency-sensitive tests with `-count=N`,
+and use caller-controlled contexts for cancellation and shutdown tests.
 
 Repository policy lives in [CONTRIBUTING.md](CONTRIBUTING.md), security reports
 follow [SECURITY.md](SECURITY.md), and user-visible changes belong under
@@ -1067,7 +1068,7 @@ go tool pprof -http=:8081 heap.prof
 
 - **Module**: `github.com/kzs0/bedrock`
 - **Go Version**: 1.24+
-- **CI Versions**: Go 1.24 and 1.25
+- **CI Versions**: Go 1.24 and 1.26
 - **Dependencies**: Standard library only (no external dependencies)
 
 ## Summary

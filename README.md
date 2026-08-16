@@ -1307,7 +1307,7 @@ go tool pprof goroutine.prof
 ## Development, Compatibility, and Support
 
 Bedrock requires Go 1.24 or newer. CI builds and runs race-enabled tests on Go
-1.24, builds and runs ordinary tests on Go 1.24 and 1.25, and separately checks
+1.24, builds and runs ordinary tests on Go 1.24 and 1.26, and separately checks
 80% aggregate coverage, formatting, vet, lint, the nested `bench` module, and
 known vulnerabilities. Before opening a pull request, run:
 
@@ -1316,8 +1316,9 @@ go build ./...
 make ci
 ```
 
-The aggregate `make ci` target requires Go 1.25 because of the pinned
-vulnerability scanner; the library itself retains its Go 1.24 baseline.
+Use Go 1.26 for CI-equivalent local results. The aggregate `make ci` target
+requires at least Go 1.25 because of the pinned vulnerability scanner; the
+library itself retains its Go 1.24 baseline.
 
 The module is pre-1.0, so minor releases can include intentional API or
 behavior changes. Review [CHANGELOG.md](CHANGELOG.md) before upgrading,
