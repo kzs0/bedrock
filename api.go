@@ -316,12 +316,23 @@ func (op *Op) Event(ctx context.Context, event attr.Event) {
 	op.state.span.AddEvent(event.Name, event.Attrs...)
 }
 
-// Done completes the operation and records all automatic metrics.
+// Done completes the operation and records all automatic metrics. The first
+// call to Done or End wins; subsequent calls are safe no-ops.
 func (op *Op) Done() {
 	if op.state == nil {
 		return
 	}
 	op.state.end()
+}
+
+// End completes the operation with optional outcome overrides. EndSuccess and
+// EndFailure override the operation's current outcome at completion. The first
+// call to End or Done wins; subsequent calls are safe no-ops.
+func (op *Op) End(opts ...EndOption) {
+	if op.state == nil {
+		return
+	}
+	op.state.end(opts...)
 }
 
 // Sum increments a named counter for the source by the given value.

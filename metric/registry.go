@@ -15,23 +15,36 @@ type Collector interface {
 
 // Registry is a thread-safe registry for metrics.
 type Registry struct {
-	mu         sync.RWMutex
-	prefix     string
-	counters   map[string]*Counter
-	gauges     map[string]*Gauge
-	histograms map[string]*Histogram
-	collectors []Collector
+	mu             sync.RWMutex
+	prefix         string
+	defaultBuckets []float64
+	counters       map[string]*Counter
+	gauges         map[string]*Gauge
+	histograms     map[string]*Histogram
+	collectors     []Collector
 }
 
 // NewRegistry creates a new metric registry with an optional prefix.
 // The prefix is prepended to all metric names (e.g., prefix="myapp" creates "myapp_metric_name").
 // If prefix is empty, no prefix is added.
 func NewRegistry(prefix string) *Registry {
+	return NewRegistryWithBuckets(prefix, nil)
+}
+
+// NewRegistryWithBuckets creates a new metric registry with an optional prefix
+// and default histogram buckets. Histograms created with nil or empty buckets
+// use these defaults. If defaultBuckets is nil or empty, DefaultBuckets is used.
+func NewRegistryWithBuckets(prefix string, defaultBuckets []float64) *Registry {
+	if len(defaultBuckets) == 0 {
+		defaultBuckets = DefaultBuckets
+	}
+
 	return &Registry{
-		prefix:     prefix,
-		counters:   make(map[string]*Counter),
-		gauges:     make(map[string]*Gauge),
-		histograms: make(map[string]*Histogram),
+		prefix:         prefix,
+		defaultBuckets: append([]float64(nil), defaultBuckets...),
+		counters:       make(map[string]*Counter),
+		gauges:         make(map[string]*Gauge),
+		histograms:     make(map[string]*Histogram),
 	}
 }
 
@@ -119,8 +132,9 @@ func (r *Registry) Histogram(name, help string, buckets []float64, labelNames ..
 	}
 
 	if len(buckets) == 0 {
-		buckets = DefaultBuckets
+		buckets = r.defaultBuckets
 	}
+	buckets = append([]float64(nil), buckets...)
 
 	// Sanitize label names
 	sanitizedLabels := make(map[string]struct{}, len(labelNames))

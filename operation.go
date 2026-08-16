@@ -24,7 +24,8 @@ type OpStep struct {
 // operationState is the internal state of an operation.
 // This is stored in the context and should not be exposed to users.
 type operationState struct {
-	mu sync.Mutex
+	mu      sync.Mutex
+	endOnce sync.Once
 
 	bedrock       *Bedrock
 	span          *trace.Span
@@ -47,7 +48,7 @@ func newOperationState(b *Bedrock, span *trace.Span, name string, cfg operationC
 	if !b.isNoop {
 		cm = b.getOpMetrics(name, cfg.metricLabels)
 	}
-	return &operationState{
+	state := &operationState{
 		bedrock:       b,
 		span:          span,
 		name:          name,
@@ -56,8 +57,55 @@ func newOperationState(b *Bedrock, span *trace.Span, name string, cfg operationC
 		metricLabels:  cfg.metricLabels,
 		cachedMetrics: cm,
 		parent:        parent,
-		success:       true, // Default to success
+		success:       cfg.success,
+		failure:       cfg.failure,
 	}
+
+	if !cfg.success {
+		state.recordFailureOnSpan(cfg.failure)
+	}
+
+	return state
+}
+
+// recordFailureOnSpan records a failed outcome on the operation span. A nil
+// error still marks the span as failed, but does not create an exception event.
+func (op *operationState) recordFailureOnSpan(err error) {
+	if op.span == nil {
+		return
+	}
+	if err != nil {
+		op.span.RecordError(err)
+		return
+	}
+	op.span.SetStatus(trace.StatusError, "")
+}
+
+// applyEndOptions applies an explicit outcome supplied at completion. Later
+// options in the same call take precedence, matching operation option behavior.
+func (op *operationState) applyEndOptions(opts []EndOption) {
+	var cfg endConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	if !cfg.hasOpts {
+		return
+	}
+
+	op.mu.Lock()
+	op.success = cfg.success
+	op.failure = cfg.failure
+	op.mu.Unlock()
+
+	if cfg.success {
+		if op.span != nil {
+			op.span.SetStatus(trace.StatusOK, "")
+		}
+		return
+	}
+	op.recordFailureOnSpan(cfg.failure)
 }
 
 // setAttr adds or updates attributes on the operation.
@@ -169,10 +217,13 @@ func (op *operationState) recordMetrics() {
 	duration := time.Since(op.startTime)
 	labels := op.buildMetricLabels()
 	cm := op.cachedMetrics
+	op.mu.Lock()
+	success := op.success
+	op.mu.Unlock()
 
 	cm.count.With(labels...).Inc()
 
-	if op.success {
+	if success {
 		cm.success.With(labels...).Inc()
 	} else {
 		cm.failure.With(labels...).Inc()
@@ -182,28 +233,32 @@ func (op *operationState) recordMetrics() {
 }
 
 // end finishes the operation.
-func (op *operationState) end() {
-	// Capture duration before any other work so the logged value matches
-	// the actual operation wall time rather than including log/metric overhead.
-	duration := time.Since(op.startTime)
+func (op *operationState) end(opts ...EndOption) {
+	op.endOnce.Do(func() {
+		op.applyEndOptions(opts)
 
-	// Sync accumulated attrs to span in one shot before ending, to avoid
-	// a Merge allocation on every Register call during the operation lifetime.
-	if op.span != nil {
-		op.mu.Lock()
-		finalAttrs := op.attrs
-		op.mu.Unlock()
-		op.span.SetAttrSet(finalAttrs)
-		op.span.End()
-	}
+		// Capture duration before any other work so the logged value matches
+		// the actual operation wall time rather than including log/metric overhead.
+		duration := time.Since(op.startTime)
 
-	// Record metrics
-	op.recordMetrics()
+		// Sync accumulated attrs to span in one shot before ending, to avoid
+		// a Merge allocation on every Register call during the operation lifetime.
+		if op.span != nil {
+			op.mu.Lock()
+			finalAttrs := op.attrs
+			op.mu.Unlock()
+			op.span.SetAttrSet(finalAttrs)
+			op.span.End()
+		}
 
-	// Canonical log if enabled
-	if op.bedrock.config.LogCanonical && !op.bedrock.isNoop {
-		op.logCanonical(duration)
-	}
+		// Record metrics
+		op.recordMetrics()
+
+		// Canonical log if enabled
+		if op.bedrock.config.LogCanonical && !op.bedrock.isNoop {
+			op.logCanonical(duration)
+		}
+	})
 }
 
 // logCanonical writes a structured log of the complete operation.
