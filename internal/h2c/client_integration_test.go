@@ -458,6 +458,68 @@ func TestClientIntegration_GOAWAYBelowActiveStreamFails(t *testing.T) {
 	server.wait(t)
 }
 
+func TestClientIntegration_GOAWAYDuringHandshake(t *testing.T) {
+	server := startIntegrationServer(t, 1, func(_ int, conn net.Conn) error {
+		preface := make([]byte, len(clientPreface))
+		if _, err := io.ReadFull(conn, preface); err != nil {
+			return fmt.Errorf("read preface: %w", err)
+		}
+		if string(preface) != clientPreface {
+			return fmt.Errorf("preface = %q", preface)
+		}
+		f, _, err := readFrame(conn)
+		if err != nil || f.typ != frameTypeSettings || f.streamID != 0 {
+			return fmt.Errorf("client SETTINGS: frame=%+v err=%v", f, err)
+		}
+		return writeIntegrationGoAway(conn, 0, errCodeProtocol)
+	})
+
+	client := NewClient(server.addr, false, integrationTimeout)
+	defer client.Shutdown()
+	if _, err := client.Do("/svc/HandshakeGOAWAY", nil, nil); err == nil ||
+		!strings.Contains(err.Error(), "handshake") || !strings.Contains(err.Error(), "GOAWAY") {
+		t.Errorf("Do error = %v, want handshake GOAWAY error", err)
+	}
+	server.wait(t)
+}
+
+func TestClientIntegration_EarlyResponseCancelsRemainingUpload(t *testing.T) {
+	server := startIntegrationServer(t, 1, func(_ int, conn net.Conn) error {
+		if err := integrationHandshake(conn, []settingParam{{settingInitialWindowSize, 1024}}); err != nil {
+			return err
+		}
+		f, _, err := readFrame(conn)
+		if err != nil || f.typ != frameTypeHeaders || f.streamID != 1 {
+			return fmt.Errorf("request HEADERS: frame=%+v err=%v", f, err)
+		}
+		f, payload, err := readFrame(conn)
+		if err != nil || f.typ != frameTypeData || f.streamID != 1 {
+			return fmt.Errorf("request DATA: frame=%+v err=%v", f, err)
+		}
+		if len(payload) != 1024 || f.flags&flagEndStream != 0 {
+			return fmt.Errorf("first DATA length=%d flags=%#x, want 1024 without END_STREAM", len(payload), f.flags)
+		}
+		if err := writeIntegrationSuccess(conn, 1); err != nil {
+			return err
+		}
+		f, payload, err = readFrame(conn)
+		if err != nil || f.typ != frameTypeRSTStream || f.streamID != 1 || len(payload) != 4 {
+			return fmt.Errorf("client RST_STREAM: frame=%+v payload=%x err=%v", f, payload, err)
+		}
+		if code := binary.BigEndian.Uint32(payload); code != errCodeCancel {
+			return fmt.Errorf("RST_STREAM code=%d, want CANCEL", code)
+		}
+		return nil
+	})
+
+	client := NewClient(server.addr, false, integrationTimeout)
+	defer client.Shutdown()
+	if _, err := client.Do("/svc/EarlyResponse", bytes.Repeat([]byte{1}, 4<<10), nil); err != nil {
+		t.Errorf("Do should accept the completed response and cancel the remaining upload: %v", err)
+	}
+	server.wait(t)
+}
+
 type integrationServer struct {
 	addr string
 	ln   net.Listener

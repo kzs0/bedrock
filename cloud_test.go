@@ -343,6 +343,34 @@ func TestWireCloudLeavesTraceShutdownToBedrock(t *testing.T) {
 	}
 }
 
+func TestWireCloudBuildsTraceExporter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	b, err := New(Config{Service: "test"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cfg := &cloudConfig{
+		apiKey:              "key",
+		endpoint:            srv.URL,
+		pushInterval:        24 * time.Hour,
+		profileInterval:     24 * time.Hour,
+		profileCPUSampleDur: time.Millisecond,
+	}
+	stopWorkers := wireCloud(b, cfg, nil)
+	if b.rawExporter == nil || b.batchProcessor == nil {
+		t.Fatal("wireCloud did not install its trace exporter and batch processor")
+	}
+
+	stopWorkers(context.Background())
+	if err := b.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Bedrock.Shutdown: %v", err)
+	}
+}
+
 type lifecycleExporter struct {
 	mu     sync.Mutex
 	events []string
