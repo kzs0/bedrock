@@ -2,12 +2,3 @@ version: "2"
 
 run:
   timeout: 5m
-
-linters:
-  exclusions:
-    rules:
-      # This declaration intentionally verifies that Op.Done retains the exact
-      # func() method-value type for source compatibility.
-      - path: operation_semantics_test\.go
-        text: "(ST1023|QF1011):"
-        linters: [staticcheck]
