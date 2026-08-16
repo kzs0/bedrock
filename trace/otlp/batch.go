@@ -2,6 +2,8 @@ package otlp
 
 import (
 	"context"
+	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -32,14 +34,24 @@ type BatchProcessor struct {
 	cfg      BatchProcessorConfig
 	exporter trace.Exporter
 
-	mu      sync.Mutex
-	queue   []*trace.Span
-	timer   *time.Timer
-	stopped bool
-	done    chan struct{}
+	mu       sync.Mutex
+	queue    []*trace.Span
+	timer    *time.Timer
+	stopped  bool
+	exports  sync.WaitGroup
+	shutdown sync.Once
+	done     chan struct{}
+	err      error
+
+	exportCtx    context.Context
+	cancelExport context.CancelFunc
+	errMu        sync.Mutex
+	exportErrors map[uint64]error
+	nextExportID uint64
 }
 
-// NewBatchProcessor creates a new batch processor.
+// NewBatchProcessor creates a new batch processor. The caller retains ownership
+// of exporter and must shut it down after the processor has drained.
 func NewBatchProcessor(exporter trace.Exporter, cfg BatchProcessorConfig) *BatchProcessor {
 	if cfg.MaxQueueSize <= 0 {
 		cfg.MaxQueueSize = 2048
@@ -51,11 +63,14 @@ func NewBatchProcessor(exporter trace.Exporter, cfg BatchProcessorConfig) *Batch
 		cfg.BatchTimeout = 5 * time.Second
 	}
 
+	exportCtx, cancelExport := context.WithCancel(context.Background())
 	bp := &BatchProcessor{
-		cfg:      cfg,
-		exporter: exporter,
-		queue:    make([]*trace.Span, 0, cfg.BatchSize),
-		done:     make(chan struct{}),
+		cfg:          cfg,
+		exporter:     exporter,
+		queue:        make([]*trace.Span, 0, cfg.BatchSize),
+		exportCtx:    exportCtx,
+		cancelExport: cancelExport,
+		exportErrors: make(map[uint64]error),
 	}
 
 	return bp
@@ -91,6 +106,10 @@ func (bp *BatchProcessor) EnqueueSpan(span *trace.Span) {
 // flush exports the current batch.
 func (bp *BatchProcessor) flush() {
 	bp.mu.Lock()
+	if bp.stopped {
+		bp.mu.Unlock()
+		return
+	}
 	bp.exportLocked()
 	bp.mu.Unlock()
 }
@@ -109,9 +128,18 @@ func (bp *BatchProcessor) exportLocked() {
 	spans := bp.queue
 	bp.queue = make([]*trace.Span, 0, bp.cfg.BatchSize)
 
-	// Export in background
+	// Add while holding bp.mu. Shutdown takes the same lock before waiting, so
+	// Wait can never race with a later Add.
+	exportID := bp.nextExportID
+	bp.nextExportID++
+	bp.exports.Add(1)
 	go func() {
-		_ = bp.exporter.ExportSpans(context.Background(), spans)
+		defer bp.exports.Done()
+		if err := bp.exporter.ExportSpans(bp.exportCtx, spans); err != nil {
+			bp.errMu.Lock()
+			bp.exportErrors[exportID] = err
+			bp.errMu.Unlock()
+		}
 	}()
 }
 
@@ -126,25 +154,52 @@ func (bp *BatchProcessor) ExportSpans(_ context.Context, spans []*trace.Span) er
 
 // Shutdown stops the processor and exports remaining spans.
 func (bp *BatchProcessor) Shutdown(ctx context.Context) error {
-	bp.mu.Lock()
-	if bp.stopped {
+	bp.shutdown.Do(func() {
+		bp.done = make(chan struct{})
+		stopContextCancellation := context.AfterFunc(ctx, bp.cancelExport)
+
+		bp.mu.Lock()
+		bp.stopped = true
+		if bp.timer != nil {
+			bp.timer.Stop()
+			bp.timer = nil
+		}
+		// Track the final queued batch exactly like timer- and size-triggered
+		// exports so one wait covers every export started by this processor.
+		bp.exportLocked()
+		exportCount := bp.nextExportID
 		bp.mu.Unlock()
-		return nil
-	}
-	bp.stopped = true
 
-	if bp.timer != nil {
-		bp.timer.Stop()
-	}
+		go func() {
+			bp.exports.Wait()
+			stopContextCancellation()
+			bp.cancelExport()
+			bp.err = bp.joinExportErrors(exportCount)
+			close(bp.done)
+		}()
+	})
 
-	// Export remaining spans
-	if len(bp.queue) > 0 {
-		spans := bp.queue
-		bp.queue = nil
-		bp.mu.Unlock()
-		return bp.exporter.ExportSpans(ctx, spans)
+	select {
+	case <-bp.done:
+		return bp.err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
+}
 
-	bp.mu.Unlock()
-	return nil
+func (bp *BatchProcessor) joinExportErrors(exportCount uint64) error {
+	bp.errMu.Lock()
+	defer bp.errMu.Unlock()
+	ids := make([]uint64, 0, len(bp.exportErrors))
+	for id := range bp.exportErrors {
+		if id < exportCount {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	errs := make([]error, 0, len(bp.exportErrors))
+	for _, id := range ids {
+		errs = append(errs, bp.exportErrors[id])
+	}
+	return errors.Join(errs...)
 }
