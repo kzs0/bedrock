@@ -1,5 +1,7 @@
 package h2c
 
+import "fmt"
+
 // HPACK Huffman code tables from RFC 7541 Appendix B.
 // Source: Go standard library vendor copy at
 // src/vendor/golang.org/x/net/http2/hpack/tables.go
@@ -41,101 +43,101 @@ var huffmanCodes = [256]uint32{
 	0xffffff9,
 	0xffffffa,
 	0xffffffb,
-	0x14,    // ' '
-	0x3f8,   // '!'
-	0x3f9,   // '"'
-	0xffa,   // '#'
-	0x1ff9,  // '$'
-	0x15,    // '%'
-	0xf8,    // '&'
-	0x7fa,   // '\''
-	0x3fa,   // '('
-	0x3fb,   // ')'
-	0xf9,    // '*'
-	0x7fb,   // '+'
-	0xfa,    // ','
-	0x16,    // '-'
-	0x17,    // '.'
-	0x18,    // '/'
-	0x0,     // '0'
-	0x1,     // '1'
-	0x2,     // '2'
-	0x19,    // '3'
-	0x1a,    // '4'
-	0x1b,    // '5'
-	0x1c,    // '6'
-	0x1d,    // '7'
-	0x1e,    // '8'
-	0x1f,    // '9'
-	0x5c,    // ':'
-	0xfb,    // ';'
-	0x7ffc,  // '<'
-	0x20,    // '='
-	0xffb,   // '>'
-	0x3fc,   // '?'
-	0x1ffa,  // '@'
-	0x21,    // 'A'
-	0x5d,    // 'B'
-	0x5e,    // 'C'
-	0x5f,    // 'D'
-	0x60,    // 'E'
-	0x61,    // 'F'
-	0x62,    // 'G'
-	0x63,    // 'H'
-	0x64,    // 'I'
-	0x65,    // 'J'
-	0x66,    // 'K'
-	0x67,    // 'L'
-	0x68,    // 'M'
-	0x69,    // 'N'
-	0x6a,    // 'O'
-	0x6b,    // 'P'
-	0x6c,    // 'Q'
-	0x6d,    // 'R'
-	0x6e,    // 'S'
-	0x6f,    // 'T'
-	0x70,    // 'U'
-	0x71,    // 'V'
-	0x72,    // 'W'
-	0xfc,    // 'X'
-	0x73,    // 'Y'
-	0xfd,    // 'Z'
-	0x1ffb,  // '['
-	0x7fff0, // '\\'
-	0x1ffc,  // ']'
-	0x3ffc,  // '^'
-	0x22,    // '_'
-	0x7ffd,  // '`'
-	0x3,     // 'a'
-	0x23,    // 'b'
-	0x4,     // 'c'
-	0x24,    // 'd'
-	0x5,     // 'e'
-	0x25,    // 'f'
-	0x26,    // 'g'
-	0x27,    // 'h'
-	0x6,     // 'i'
-	0x74,    // 'j'
-	0x75,    // 'k'
-	0x28,    // 'l'
-	0x29,    // 'm'
-	0x2a,    // 'n'
-	0x7,     // 'o'
-	0x2b,    // 'p'
-	0x76,    // 'q'
-	0x2c,    // 'r'
-	0x8,     // 's'
-	0x9,     // 't'
-	0x2d,    // 'u'
-	0x77,    // 'v'
-	0x78,    // 'w'
-	0x79,    // 'x'
-	0x7a,    // 'y'
-	0x7b,    // 'z'
-	0x7ffe,  // '{'
-	0x7fc,   // '|'
-	0x3ffd,  // '}'
-	0x1ffd,  // '~'
+	0x14,      // ' '
+	0x3f8,     // '!'
+	0x3f9,     // '"'
+	0xffa,     // '#'
+	0x1ff9,    // '$'
+	0x15,      // '%'
+	0xf8,      // '&'
+	0x7fa,     // '\''
+	0x3fa,     // '('
+	0x3fb,     // ')'
+	0xf9,      // '*'
+	0x7fb,     // '+'
+	0xfa,      // ','
+	0x16,      // '-'
+	0x17,      // '.'
+	0x18,      // '/'
+	0x0,       // '0'
+	0x1,       // '1'
+	0x2,       // '2'
+	0x19,      // '3'
+	0x1a,      // '4'
+	0x1b,      // '5'
+	0x1c,      // '6'
+	0x1d,      // '7'
+	0x1e,      // '8'
+	0x1f,      // '9'
+	0x5c,      // ':'
+	0xfb,      // ';'
+	0x7ffc,    // '<'
+	0x20,      // '='
+	0xffb,     // '>'
+	0x3fc,     // '?'
+	0x1ffa,    // '@'
+	0x21,      // 'A'
+	0x5d,      // 'B'
+	0x5e,      // 'C'
+	0x5f,      // 'D'
+	0x60,      // 'E'
+	0x61,      // 'F'
+	0x62,      // 'G'
+	0x63,      // 'H'
+	0x64,      // 'I'
+	0x65,      // 'J'
+	0x66,      // 'K'
+	0x67,      // 'L'
+	0x68,      // 'M'
+	0x69,      // 'N'
+	0x6a,      // 'O'
+	0x6b,      // 'P'
+	0x6c,      // 'Q'
+	0x6d,      // 'R'
+	0x6e,      // 'S'
+	0x6f,      // 'T'
+	0x70,      // 'U'
+	0x71,      // 'V'
+	0x72,      // 'W'
+	0xfc,      // 'X'
+	0x73,      // 'Y'
+	0xfd,      // 'Z'
+	0x1ffb,    // '['
+	0x7fff0,   // '\\'
+	0x1ffc,    // ']'
+	0x3ffc,    // '^'
+	0x22,      // '_'
+	0x7ffd,    // '`'
+	0x3,       // 'a'
+	0x23,      // 'b'
+	0x4,       // 'c'
+	0x24,      // 'd'
+	0x5,       // 'e'
+	0x25,      // 'f'
+	0x26,      // 'g'
+	0x27,      // 'h'
+	0x6,       // 'i'
+	0x74,      // 'j'
+	0x75,      // 'k'
+	0x28,      // 'l'
+	0x29,      // 'm'
+	0x2a,      // 'n'
+	0x7,       // 'o'
+	0x2b,      // 'p'
+	0x76,      // 'q'
+	0x2c,      // 'r'
+	0x8,       // 's'
+	0x9,       // 't'
+	0x2d,      // 'u'
+	0x77,      // 'v'
+	0x78,      // 'w'
+	0x79,      // 'x'
+	0x7a,      // 'y'
+	0x7b,      // 'z'
+	0x7ffe,    // '{'
+	0x7fc,     // '|'
+	0x3ffd,    // '}'
+	0x1ffd,    // '~'
 	0xffffffc, // DEL (0x7f)
 	0xfffe6,
 	0x3fffd2,
@@ -286,48 +288,67 @@ var huffmanCodeLen = [256]uint8{
 	26, 27, 26, 26, 27, 27, 27, 27, 27, 28, 27, 27, 27, 27, 27, 26,
 }
 
+var huffmanDecodeTable = func() [31]map[uint32]byte {
+	var table [31]map[uint32]byte
+	for symbol, code := range huffmanCodes {
+		length := huffmanCodeLen[symbol]
+		if table[length] == nil {
+			table[length] = make(map[uint32]byte)
+		}
+		table[length][code] = byte(symbol)
+	}
+	return table
+}()
+
 // decodeHuffman decodes a Huffman-encoded HPACK string.
 // It processes bits from src using the RFC 7541 code table.
 func decodeHuffman(src []byte) string {
-	if len(src) == 0 {
-		return ""
-	}
+	decoded, _ := decodeHuffmanStrict(src, ^uint64(0))
+	return decoded
+}
 
-	// Accumulate all source bits into a sliding window.
-	// We process from MSB of the first byte to LSB of the last byte.
-	var result []byte
-	var acc uint64 // bit accumulator (MSB-aligned)
-	bits := 0      // number of valid bits in acc
+// decodeHuffmanStrict decodes an HPACK Huffman string while enforcing an output
+// limit. EOS is forbidden inside encoded data; trailing padding must be at most
+// seven one bits, which is the required prefix of EOS.
+func decodeHuffmanStrict(src []byte, maxDecodedBytes uint64) (string, error) {
+	capacity := len(src)
+	if uint64(capacity) > maxDecodedBytes {
+		capacity = int(maxDecodedBytes)
+	}
+	result := make([]byte, 0, capacity)
+	var code uint32
+	codeLen := 0
 
 	for _, b := range src {
-		acc = (acc << 8) | uint64(b)
-		bits += 8
+		for bit := 7; bit >= 0; bit-- {
+			code = code<<1 | uint32((b>>bit)&1)
+			codeLen++
 
-		for bits >= 5 { // minimum code length is 5 bits
-			found := false
-			// Try codes from shortest to longest.
-			// Since codes are prefix-free, only one can match.
-			for sym := 0; sym < 256; sym++ {
-				l := int(huffmanCodeLen[sym])
-				if bits < l {
-					continue
+			if symbol, matched := huffmanDecodeTable[codeLen][code]; matched {
+				if uint64(len(result)) >= maxDecodedBytes {
+					return "", fmt.Errorf("hpack: Huffman output exceeds %d-byte budget", maxDecodedBytes)
 				}
-				// Extract top l bits from acc
-				top := acc >> uint(bits-l)
-				if uint32(top) == huffmanCodes[sym] {
-					result = append(result, byte(sym))
-					bits -= l
-					acc &= (1 << uint(bits)) - 1
-					found = true
-					break
-				}
+				result = append(result, symbol)
+				code = 0
+				codeLen = 0
+				continue
 			}
-			if !found {
-				// No matching code found with current bits — need more input
-				break
+
+			// The EOS symbol is 30 one bits and MUST NOT appear in a string.
+			if codeLen == 30 {
+				if code == (uint32(1)<<30)-1 {
+					return "", fmt.Errorf("hpack: Huffman EOS symbol is forbidden")
+				}
+				return "", fmt.Errorf("hpack: invalid Huffman code")
 			}
 		}
 	}
 
-	return string(result)
+	if codeLen > 7 {
+		return "", fmt.Errorf("hpack: invalid Huffman padding length %d", codeLen)
+	}
+	if codeLen > 0 && code != (uint32(1)<<codeLen)-1 {
+		return "", fmt.Errorf("hpack: invalid Huffman padding")
+	}
+	return string(result), nil
 }

@@ -1,14 +1,23 @@
 package h2c
 
+import (
+	"fmt"
+	"math"
+)
+
 // hpack.go implements the subset of HPACK (RFC 7541) needed for gRPC client requests.
 //
 // Encoding: uses non-Huffman literals only (H=0). Static table indexed references
 // are used for :method, :scheme. All other headers are literal without indexing.
 //
-// Decoding: handles indexed (static table only) and H=0 literal headers.
-// Huffman-encoded (H=1) strings are read and skipped; the header name/value will
-// be empty in the decoded result. Dynamic table size is tracked but entries are
-// not stored (we set SETTINGS_HEADER_TABLE_SIZE=0 to discourage server use).
+// Decoding: handles static-table indexed and literal headers, including HPACK
+// Huffman strings. The client advertises a zero-sized dynamic table, so dynamic
+// references and non-zero dynamic table size updates are compression errors.
+
+// DefaultMaxHeaderListSize is the decoded response header-list budget used by
+// the transport. Per RFC 7540, each field consumes its name and value lengths
+// plus 32 bytes of overhead.
+const DefaultMaxHeaderListSize uint64 = 64 << 10
 
 // hpackStaticTable is the HPACK static header table (RFC 7541 Appendix A).
 // Index 0 is unused; entries are 1-indexed as per the RFC.
@@ -170,118 +179,211 @@ type hpackHeader struct {
 }
 
 // DecodeHeaders decodes an HPACK header block into a list of headers.
-// Dynamic table updates are tracked (size changes respected) but entries
-// are discarded since we set SETTINGS_HEADER_TABLE_SIZE=0.
-// Huffman-encoded string literals result in an empty name or value.
+//
+// It is retained for compatibility with existing package users. New transport
+// code should call DecodeHeadersStrict so malformed input cannot be mistaken for
+// a valid, incomplete header block.
 func DecodeHeaders(block []byte) []hpackHeader {
-	var headers []hpackHeader
-	i := 0
-	dynTableSize := 0
+	headers, _ := DecodeHeadersStrict(block, math.MaxUint64)
+	return headers
+}
 
-	for i < len(block) {
+// DecodeHeadersStrict decodes one complete HPACK header block. It rejects
+// malformed encodings and enforces maxHeaderListSize using the RFC header-list
+// accounting rule: len(name) + len(value) + 32 for every decoded field.
+//
+// This decoder intentionally has a zero-capacity dynamic table, matching the
+// SETTINGS_HEADER_TABLE_SIZE value advertised by Client. A size update to zero
+// is accepted only before the first header field; dynamic references and any
+// non-zero size update are rejected.
+func DecodeHeadersStrict(block []byte, maxHeaderListSize uint64) ([]hpackHeader, error) {
+	var headers []hpackHeader
+	var headerListSize uint64
+	sawHeader := false
+
+	for i := 0; i < len(block); {
 		b := block[i]
 
 		switch {
 		case b&0x80 != 0:
-			// Indexed representation: 1xxxxxxx
-			idx, n := decodeHpackInt(block[i:], 7)
-			i += n
-			if idx > 0 && int(idx) < len(hpackStaticTable) {
-				e := hpackStaticTable[idx]
-				headers = append(headers, hpackHeader{e.name, e.value})
+			idx, n, err := decodeHpackIntStrict(block[i:], 7)
+			if err != nil {
+				return nil, fmt.Errorf("hpack: indexed field: %w", err)
 			}
-			// Dynamic table lookups skipped (we don't store them)
+			if idx == 0 {
+				return nil, fmt.Errorf("hpack: indexed field has zero index")
+			}
+			if idx >= uint64(len(hpackStaticTable)) {
+				return nil, fmt.Errorf("hpack: dynamic index %d unavailable with zero-sized table", idx)
+			}
+			i += n
+			e := hpackStaticTable[idx]
+			if err := accountHeaderListSize(&headerListSize, maxHeaderListSize, e.name, e.value); err != nil {
+				return nil, err
+			}
+			headers = append(headers, hpackHeader{e.name, e.value})
+			sawHeader = true
 
 		case b&0xc0 == 0x40:
-			// Literal with incremental indexing: 01xxxxxx
-			name, value, n := decodeLiteralHeader(block[i:], 6)
+			name, value, n, err := decodeLiteralHeaderStrict(block[i:], 6, remainingHeaderBytes(headerListSize, maxHeaderListSize))
+			if err != nil {
+				return nil, fmt.Errorf("hpack: incremental literal: %w", err)
+			}
 			i += n
-			// Add to dynamic table (tracked for size, entry discarded)
-			dynTableSize += 32 + len(name) + len(value)
-			_ = dynTableSize
+			if err := accountHeaderListSize(&headerListSize, maxHeaderListSize, name, value); err != nil {
+				return nil, err
+			}
 			headers = append(headers, hpackHeader{name, value})
+			sawHeader = true
 
 		case b&0xe0 == 0x20:
-			// Dynamic table size update: 001xxxxx
-			_, n := decodeHpackInt(block[i:], 5)
+			size, n, err := decodeHpackIntStrict(block[i:], 5)
+			if err != nil {
+				return nil, fmt.Errorf("hpack: dynamic table size update: %w", err)
+			}
+			if sawHeader {
+				return nil, fmt.Errorf("hpack: dynamic table size update after header field")
+			}
+			if size != 0 {
+				return nil, fmt.Errorf("hpack: dynamic table size %d exceeds configured maximum 0", size)
+			}
 			i += n
 
 		default:
-			// Literal without indexing (0x00) or never indexed (0x10)
-			prefixBits := 4
-			name, value, n := decodeLiteralHeader(block[i:], prefixBits)
+			name, value, n, err := decodeLiteralHeaderStrict(block[i:], 4, remainingHeaderBytes(headerListSize, maxHeaderListSize))
+			if err != nil {
+				return nil, fmt.Errorf("hpack: literal: %w", err)
+			}
 			i += n
+			if err := accountHeaderListSize(&headerListSize, maxHeaderListSize, name, value); err != nil {
+				return nil, err
+			}
 			headers = append(headers, hpackHeader{name, value})
+			sawHeader = true
 		}
 	}
-	return headers
+	return headers, nil
 }
 
-// decodeLiteralHeader decodes a literal header field from block[0:].
-// prefixBits is the number of bits used as the integer prefix for the name index.
-// Returns the (name, value, bytes_consumed).
-func decodeLiteralHeader(block []byte, prefixBits int) (name, value string, n int) {
-	mask := byte((1 << prefixBits) - 1)
-	idx, n := decodeHpackInt(block, prefixBits)
-
-	if idx == 0 {
-		// New name literal
-		s, sn := decodeHpackString(block[n:])
-		name = s
-		n += sn
-	} else if int(idx) < len(hpackStaticTable) {
-		// Indexed name from static table
-		name = hpackStaticTable[idx].name
+func remainingHeaderBytes(used, limit uint64) uint64 {
+	if used >= limit || limit-used <= 32 {
+		return 0
 	}
-	_ = mask
+	return limit - used - 32
+}
 
-	value, vn := decodeHpackString(block[n:])
-	n += vn
-	return name, value, n
+func accountHeaderListSize(used *uint64, limit uint64, name, value string) error {
+	fieldSize := uint64(len(name)) + uint64(len(value)) + 32
+	if *used > limit || fieldSize > limit-*used {
+		return fmt.Errorf("hpack: decoded header list exceeds %d bytes", limit)
+	}
+	*used += fieldSize
+	return nil
+}
+
+func decodeLiteralHeaderStrict(block []byte, prefixBits int, maxNameValueBytes uint64) (name, value string, n int, err error) {
+	idx, n, err := decodeHpackIntStrict(block, prefixBits)
+	if err != nil {
+		return "", "", 0, err
+	}
+
+	remaining := maxNameValueBytes
+	if idx == 0 {
+		var consumed int
+		var decodeErr error
+		name, consumed, decodeErr = decodeHpackStringStrict(block[n:], remaining)
+		if decodeErr != nil {
+			return "", "", 0, fmt.Errorf("name: %w", decodeErr)
+		}
+		n += consumed
+		if uint64(len(name)) > remaining {
+			return "", "", 0, fmt.Errorf("name exceeds decoded field budget")
+		}
+		remaining -= uint64(len(name))
+	} else {
+		if idx >= uint64(len(hpackStaticTable)) {
+			return "", "", 0, fmt.Errorf("dynamic name index %d unavailable with zero-sized table", idx)
+		}
+		name = hpackStaticTable[idx].name
+		if uint64(len(name)) > remaining {
+			return "", "", 0, fmt.Errorf("name exceeds decoded field budget")
+		}
+		remaining -= uint64(len(name))
+	}
+
+	value, consumed, err := decodeHpackStringStrict(block[n:], remaining)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("value: %w", err)
+	}
+	n += consumed
+	return name, value, n, nil
 }
 
 // decodeHpackInt decodes an HPACK integer with an N-bit prefix from block[0:].
 // Returns (value, bytes_consumed).
 func decodeHpackInt(block []byte, prefixBits int) (uint64, int) {
+	value, n, _ := decodeHpackIntStrict(block, prefixBits)
+	return value, n
+}
+
+func decodeHpackIntStrict(block []byte, prefixBits int) (uint64, int, error) {
+	if prefixBits < 1 || prefixBits > 8 {
+		return 0, 0, fmt.Errorf("invalid integer prefix width %d", prefixBits)
+	}
 	if len(block) == 0 {
-		return 0, 0
+		return 0, 0, fmt.Errorf("truncated integer")
 	}
 	mask := byte((1 << prefixBits) - 1)
-	val := uint64(block[0] & mask)
-	if val < uint64(mask) {
-		return val, 1
+	value := uint64(block[0] & mask)
+	if value < uint64(mask) {
+		return value, 1, nil
 	}
-	// Multi-byte integer
-	shift := 0
+
+	shift := uint(0)
 	for i := 1; i < len(block); i++ {
-		val += uint64(block[i]&0x7f) << shift
-		shift += 7
-		if block[i]&0x80 == 0 {
-			return val, i + 1
+		part := uint64(block[i] & 0x7f)
+		if shift >= 64 || part > (math.MaxUint64-value)>>shift {
+			return 0, 0, fmt.Errorf("integer overflow")
 		}
+		value += part << shift
+		if block[i]&0x80 == 0 {
+			return value, i + 1, nil
+		}
+		shift += 7
 	}
-	return val, len(block)
+	return 0, 0, fmt.Errorf("truncated integer")
 }
 
 // decodeHpackString decodes an HPACK string literal from block[0:].
 // Returns ("", n) for Huffman-encoded strings (H=1) — caller should treat as opaque.
 func decodeHpackString(block []byte) (string, int) {
+	value, n, _ := decodeHpackStringStrict(block, math.MaxUint64)
+	return value, n
+}
+
+func decodeHpackStringStrict(block []byte, maxDecodedBytes uint64) (string, int, error) {
 	if len(block) == 0 {
-		return "", 0
+		return "", 0, fmt.Errorf("truncated string")
 	}
 	huffman := block[0]&0x80 != 0
-	length, n := decodeHpackInt(block, 7)
-	if int(n)+int(length) > len(block) {
-		return "", len(block) // truncated
+	length, n, err := decodeHpackIntStrict(block, 7)
+	if err != nil {
+		return "", 0, err
+	}
+	if length > uint64(len(block)-n) {
+		return "", 0, fmt.Errorf("truncated string: declared %d bytes, have %d", length, len(block)-n)
 	}
 	raw := block[n : n+int(length)]
 	n += int(length)
 	if huffman {
-		// Huffman decoding not implemented; skip and return empty.
-		// Most OTEL collectors use Huffman for header names but not for
-		// short values like grpc-status "0". Callers fall back on RST_STREAM
-		// detection for error cases.
-		return decodeHuffman(raw), n
+		value, err := decodeHuffmanStrict(raw, maxDecodedBytes)
+		if err != nil {
+			return "", 0, err
+		}
+		return value, n, nil
 	}
-	return string(raw), n
+	if length > maxDecodedBytes {
+		return "", 0, fmt.Errorf("decoded string exceeds %d-byte budget", maxDecodedBytes)
+	}
+	return string(raw), n, nil
 }

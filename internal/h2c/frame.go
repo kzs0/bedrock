@@ -17,6 +17,7 @@ const (
 	frameTypeHeaders      = 0x1
 	frameTypeRSTStream    = 0x3
 	frameTypeSettings     = 0x4
+	frameTypePushPromise  = 0x5
 	frameTypePing         = 0x6
 	frameTypeGoAway       = 0x7
 	frameTypeWindowUpdate = 0x8
@@ -34,15 +35,16 @@ const (
 
 // HTTP/2 error codes (RFC 7540 §7).
 const (
-	errCodeNoError    = 0x0
-	errCodeProtocol   = 0x1
-	errCodeInternal   = 0x2
-	errCodeFlowCtrl   = 0x3
-	errCodeSettings   = 0x4
-	errCodeRefused    = 0x8
-	errCodeConnect    = 0xa
-	errCodeEnhance    = 0xb
-	errCodeHTTP11Req  = 0xd
+	errCodeNoError   = 0x0
+	errCodeProtocol  = 0x1
+	errCodeInternal  = 0x2
+	errCodeFlowCtrl  = 0x3
+	errCodeSettings  = 0x4
+	errCodeRefused   = 0x7
+	errCodeCancel    = 0x8
+	errCodeConnect   = 0xa
+	errCodeEnhance   = 0xb
+	errCodeHTTP11Req = 0xd
 )
 
 // SETTINGS identifiers (RFC 7540 §6.5.2).
