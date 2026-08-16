@@ -15,6 +15,8 @@ import (
 	"github.com/kzs0/bedrock/profile"
 )
 
+const defaultAddr = "127.0.0.1:9090"
+
 // Server provides HTTP endpoints for metrics and profiling.
 type Server struct {
 	metrics         *metric.Registry
@@ -25,7 +27,8 @@ type Server struct {
 
 // Config configures the observability HTTP server.
 type Config struct {
-	// Addr is the address to listen on (e.g., ":9090").
+	// Addr is the address to listen on (e.g., "127.0.0.1:9090").
+	// An empty address defaults to loopback only.
 	Addr string
 	// EnableMetrics enables the /metrics endpoint.
 	EnableMetrics bool
@@ -69,9 +72,9 @@ type Config struct {
 // production-grade security settings to protect against DoS attacks.
 func DefaultConfig() Config {
 	return Config{
-		Addr:          ":9090",
+		Addr:          defaultAddr,
 		EnableMetrics: true,
-		EnablePprof:   true,
+		EnablePprof:   false,
 
 		// DoS Protection Defaults
 		ReadTimeout:       10 * time.Second,  // Total request read timeout
@@ -94,6 +97,10 @@ func DefaultConfig() Config {
 //	obsServer := server.New(b.Metrics(), cfg)
 //	go obsServer.ListenAndServe()
 func New(metrics *metric.Registry, cfg Config) *Server {
+	if cfg.Addr == "" {
+		cfg.Addr = defaultAddr
+	}
+
 	mux := http.NewServeMux()
 
 	if cfg.EnableMetrics {

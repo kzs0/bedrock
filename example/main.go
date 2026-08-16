@@ -43,25 +43,30 @@ func main() {
 	)
 	defer close()
 
-	// Demonstrate different log levels
-	bedrock.Info(ctx, "Observability server listening on :9090",
-		attr.String("server.address", ":9090"),
-		attr.String("endpoints", "metrics, health, pprof"))
+	// Demonstrate different log levels. By default, the observability server is
+	// loopback-only and pprof is disabled; the full-stack Docker example opts in
+	// to container-network access and profiling through environment variables.
+	bedrock.Info(ctx, "Observability server configured",
+		attr.String("server.address", cfg.Bedrock.ServerAddr),
+		attr.Bool("server.metrics_enabled", cfg.Bedrock.ServerMetrics),
+		attr.Bool("server.pprof_enabled", cfg.Bedrock.ServerPprof))
 
 	bedrock.Debug(ctx, "Available endpoints",
 		attr.String("metrics", "http://localhost:9090/metrics"),
-		attr.String("health", "http://localhost:9090/health"),
-		attr.String("pprof", "http://localhost:9090/debug/pprof/"))
+		attr.String("health", "http://localhost:9090/health"))
 
-	bedrock.Info(ctx, "Manual profiling commands available",
-		attr.String("cpu_profile", "curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30"),
-		attr.String("heap_profile", "curl -o heap.prof http://localhost:9090/debug/pprof/heap"),
-		attr.String("goroutine_profile", "curl -o goroutine.prof http://localhost:9090/debug/pprof/goroutine"))
-
-	bedrock.Info(ctx, "Continuous profiling setup",
-		attr.String("compose_start", "docker-compose up -d"),
-		attr.String("grafana_url", "http://localhost:3000"),
-		attr.String("scrape_interval", "15s"))
+	if cfg.Bedrock.ServerPprof {
+		bedrock.Debug(ctx, "Profiling endpoint enabled",
+			attr.String("pprof", "http://localhost:9090/debug/pprof/"))
+		bedrock.Info(ctx, "Manual profiling commands available",
+			attr.String("cpu_profile", "curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30"),
+			attr.String("heap_profile", "curl -o heap.prof http://localhost:9090/debug/pprof/heap"),
+			attr.String("goroutine_profile", "curl -o goroutine.prof http://localhost:9090/debug/pprof/goroutine"))
+		bedrock.Info(ctx, "Continuous profiling setup",
+			attr.String("compose_start", "docker-compose up -d"),
+			attr.String("grafana_url", "http://localhost:3000"),
+			attr.String("scrape_interval", "15s"))
+	}
 
 	// Setup HTTP server with security timeouts
 	mux := http.NewServeMux()

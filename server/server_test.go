@@ -24,14 +24,14 @@ func newTestServer(cfg Config) *Server {
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Addr != ":9090" {
-		t.Errorf("Addr: got %q, want :9090", cfg.Addr)
+	if cfg.Addr != "127.0.0.1:9090" {
+		t.Errorf("Addr: got %q, want 127.0.0.1:9090", cfg.Addr)
 	}
 	if !cfg.EnableMetrics {
 		t.Error("EnableMetrics should default to true")
 	}
-	if !cfg.EnablePprof {
-		t.Error("EnablePprof should default to true")
+	if cfg.EnablePprof {
+		t.Error("EnablePprof should default to false")
 	}
 	if cfg.ReadTimeout != 10*time.Second {
 		t.Errorf("ReadTimeout: got %v, want 10s", cfg.ReadTimeout)
@@ -60,6 +60,9 @@ func TestNew_ZeroTimeoutsGetDefaults(t *testing.T) {
 	if srv == nil {
 		t.Fatal("New returned nil")
 	}
+	if srv.server.Addr != "127.0.0.1:9090" {
+		t.Errorf("Addr not defaulted safely: got %q, want 127.0.0.1:9090", srv.server.Addr)
+	}
 	if srv.server.ReadTimeout != 10*time.Second {
 		t.Errorf("ReadTimeout not defaulted: got %v", srv.server.ReadTimeout)
 	}
@@ -71,6 +74,21 @@ func TestNew_ZeroTimeoutsGetDefaults(t *testing.T) {
 	}
 	if srv.server.MaxHeaderBytes != 1<<20 {
 		t.Errorf("MaxHeaderBytes not defaulted: got %d", srv.server.MaxHeaderBytes)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("zero-value Config enabled pprof: got status %d, want 404", rec.Code)
+	}
+}
+
+func TestNew_PreservesCustomAddress(t *testing.T) {
+	const addr = "0.0.0.0:8080"
+	srv := newTestServer(Config{Addr: addr})
+	if srv.server.Addr != addr {
+		t.Errorf("Addr: got %q, want custom address %q", srv.server.Addr, addr)
 	}
 }
 

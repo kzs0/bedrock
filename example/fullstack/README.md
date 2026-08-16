@@ -2,6 +2,11 @@
 
 This example demonstrates a complete observability stack using Bedrock with industry-standard open-source tools.
 
+The Compose configuration explicitly sets `BEDROCK_SERVER_ADDR=0.0.0.0:9090`
+and `BEDROCK_SERVER_PPROF=true` so Prometheus and Pyroscope can reach the app
+inside the isolated container network. Bedrock itself defaults to a loopback-only
+listener with pprof disabled.
+
 ## Stack Overview
 
 - **Application**: Go service instrumented with Bedrock

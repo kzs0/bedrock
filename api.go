@@ -101,6 +101,8 @@ func (h *HistogramWithStatic) Observe(v float64) {
 
 // Init initializes bedrock in the context and returns a context with bedrock attached
 // and a cleanup function. If no config is provided, it loads from environment variables.
+// Init panics before starting any components if environment configuration cannot
+// be parsed, matching MustFromEnv's fail-fast behavior.
 //
 // The observability server is automatically started if Config.ServerEnabled is true.
 // Set ServerEnabled to true in your config to enable automatic server startup.
@@ -116,8 +118,7 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 	if cfg.config == nil {
 		envCfg, err := FromEnv()
 		if err != nil {
-			// Fall back to defaults
-			envCfg = DefaultConfig()
+			panic(err)
 		}
 		cfg.config = &envCfg
 	}
