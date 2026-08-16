@@ -2,76 +2,153 @@ name: PR Build and Test
 
 on:
   pull_request:
-    branches:
-      - main
-      - develop
+    branches: [main, develop]
   push:
-    branches:
-      - main
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    name: Test
+    name: Test (Go ${{ matrix.go-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        go-version: ["1.24", "1.25"]
+        # Preserve the Go 1.24 baseline and test the current Go toolchain.
+        go-version: ["1.24.13", "1.26.6"]
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
 
-      - name: Download dependencies
-        run: go mod download
-
       - name: Verify dependencies
-        run: go mod verify
+        run: |
+          go mod download
+          go mod verify
 
       - name: Build
-        run: go build -v ./...
+        run: go build ./...
 
       - name: Run tests
-        run: go test -v -race ./...
+        run: go test -count=1 ./...
 
-  lint:
-    name: Lint
+  quality:
+    name: Format, Vet, and Lint
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.24"
+          go-version: "1.24.13"
           cache: true
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: latest
-          args: --timeout=5m
-
-  vet:
-    name: Go Vet
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.25"
-          cache: true
+      - name: Check formatting
+        run: ./scripts/check-gofmt.sh
 
       - name: Run go vet
         run: go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
+  race:
+    name: Race Detector
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24.13"
+          cache: true
+
+      - name: Run race tests
+        run: go test -race -count=1 ./...
+
+  bench-module:
+    name: Nested Bench Module
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24.13"
+          cache-dependency-path: bench/go.sum
+
+      - name: Verify bench dependencies
+        working-directory: bench
+        run: |
+          ../scripts/check-bench-tidy.sh
+          go mod download
+          go mod verify
+
+      - name: Compile and test bench module
+        working-directory: bench
+        run: go test -count=1 ./...
+
+      - name: Vet bench module
+        working-directory: bench
+        run: go vet ./...
+
+  vulnerability:
+    name: Vulnerability Scan (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [".", "bench"]
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Scan with the current patched toolchain; compatibility with the
+          # library's Go 1.24 baseline is tested in separate jobs above.
+          go-version: "1.26.6"
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+
+      - name: Run govulncheck
+        working-directory: ${{ matrix.module }}
+        run: govulncheck ./...

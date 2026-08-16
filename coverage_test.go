@@ -177,6 +177,31 @@ func TestOp_Event_NoSpan(t *testing.T) {
 	op.Done()
 }
 
+func TestOpStep_Event(t *testing.T) {
+	ctx, close := Init(context.Background(),
+		WithConfig(Config{Service: "test"}),
+	)
+	defer close()
+
+	op, ctx := Operation(ctx, "step_event_op")
+	step := Step(ctx, "query")
+	step.Event(ctx, attr.NewEvent("query.complete", attr.String("rows", "1")))
+
+	events := step.span.Events()
+	if len(events) != 1 || events[0].Name != "query.complete" {
+		t.Fatalf("step events = %+v, want one query.complete event", events)
+	}
+	if got, ok := events[0].Attrs.Get("rows"); !ok || got.AsString() != "1" {
+		t.Fatalf("step event rows attribute = (%v, %v), want 1", got, ok)
+	}
+
+	step.Done()
+	noTraceStep := Step(ctx, "untraced", NoTrace())
+	noTraceStep.Event(ctx, attr.NewEvent("ignored"))
+	noTraceStep.Done()
+	op.Done()
+}
+
 // ── Src.Sum, Src.Gauge, Src.Histogram (api.go) ─────────────────────────────
 
 func TestSrc_Sum(t *testing.T) {

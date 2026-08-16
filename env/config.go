@@ -44,6 +44,16 @@ func parseStruct(v reflect.Value, prefix string) error {
 			continue
 		}
 
+		// Parse tags before descending so invalid tags on nested structs fail
+		// closed and the skip marker applies to the entire subtree.
+		tag, err := parseTag(field)
+		if err != nil {
+			return fmt.Errorf("field %s: %w", field.Name, err)
+		}
+		if tag.Skip {
+			continue
+		}
+
 		// Handle nested structs
 		if field.Type.Kind() == reflect.Struct && field.Type != reflect.TypeOf(struct{}{}) {
 			nestedPrefix := prefix
@@ -54,12 +64,6 @@ func parseStruct(v reflect.Value, prefix string) error {
 				return err
 			}
 			continue
-		}
-
-		// Parse env tag
-		tag, err := parseTag(field)
-		if err != nil {
-			return fmt.Errorf("field %s: %w", field.Name, err)
 		}
 
 		if tag.Name == "" {
@@ -83,6 +87,14 @@ func validateStruct(v reflect.Value, prefix string) error {
 		field := t.Field(i)
 		fieldVal := v.Field(i)
 
+		tag, err := parseTag(field)
+		if err != nil {
+			return fmt.Errorf("field %s: %w", field.Name, err)
+		}
+		if tag.Skip {
+			continue
+		}
+
 		// Handle nested structs
 		if field.Type.Kind() == reflect.Struct && field.Type != reflect.TypeOf(struct{}{}) {
 			nestedPrefix := prefix
@@ -93,11 +105,6 @@ func validateStruct(v reflect.Value, prefix string) error {
 				return err
 			}
 			continue
-		}
-
-		tag, err := parseTag(field)
-		if err != nil {
-			return fmt.Errorf("field %s: %w", field.Name, err)
 		}
 
 		if tag.Required && isZero(fieldVal) {

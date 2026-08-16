@@ -15,26 +15,26 @@ type RuntimeCollector struct {
 	staticLabels []attr.Attr
 
 	// Gauges for runtime metrics
-	goInfo           *Gauge
-	goroutines       *Gauge
-	threads          *Gauge
-	heapAllocBytes   *Gauge
-	heapIdleBytes    *Gauge
-	heapInuseBytes   *Gauge
-	heapObjects      *Gauge
+	goInfo            *Gauge
+	goroutines        *Gauge
+	threads           *Gauge
+	heapAllocBytes    *Gauge
+	heapIdleBytes     *Gauge
+	heapInuseBytes    *Gauge
+	heapObjects       *Gauge
 	heapReleasedBytes *Gauge
-	stackInuseBytes  *Gauge
-	stackSysBytes    *Gauge
-	mallocs          *Gauge
-	frees            *Gauge
-	gcSysBytes       *Gauge
-	gcNextBytes      *Gauge
-	gcLastNanos      *Gauge
+	stackInuseBytes   *Gauge
+	stackSysBytes     *Gauge
+	mallocs           *Gauge
+	frees             *Gauge
+	gcSysBytes        *Gauge
+	gcNextBytes       *Gauge
+	gcLastNanos       *Gauge
 	gcPauseTotalNanos *Gauge
-	gcNumGC          *Gauge
-	gcNumForcedGC    *Gauge
-	cpuClasses       map[string]*Gauge
-	memoryClasses    map[string]*Gauge
+	gcNumGC           *Gauge
+	gcNumForcedGC     *Gauge
+	cpuClasses        map[string]*Gauge
+	memoryClasses     map[string]*Gauge
 
 	mu sync.Mutex
 }
@@ -49,9 +49,9 @@ func NewRuntimeCollector(registry *Registry, staticLabels ...attr.Attr) *Runtime
 	}
 
 	rc := &RuntimeCollector{
-		registry:     registry,
-		staticLabels: staticLabels,
-		cpuClasses:   make(map[string]*Gauge),
+		registry:      registry,
+		staticLabels:  staticLabels,
+		cpuClasses:    make(map[string]*Gauge),
 		memoryClasses: make(map[string]*Gauge),
 	}
 

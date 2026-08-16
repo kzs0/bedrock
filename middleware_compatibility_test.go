@@ -57,6 +57,23 @@ func TestResponseWriterDelegatesFlush(t *testing.T) {
 	}
 }
 
+func TestResponseWriterDelegatesLegacyFlushMethod(t *testing.T) {
+	underlying := &optionalCompatibilityWriter{compatibilityWriter: newCompatibilityWriter()}
+	base, rw := wrapCompatibilityWriter(underlying)
+	flusher, ok := rw.(http.Flusher)
+	if !ok {
+		t.Fatal("wrapped writer does not advertise underlying Flusher capability")
+	}
+
+	flusher.Flush()
+	if !underlying.flushed {
+		t.Fatal("underlying Flush was not called")
+	}
+	if !base.wroteHeader || base.status != http.StatusOK || underlying.status != http.StatusOK {
+		t.Fatalf("flush status = wrapper (%v, %d), underlying %d; want committed 200", base.wroteHeader, base.status, underlying.status)
+	}
+}
+
 func TestResponseWriterUnwrapSupportsResponseController(t *testing.T) {
 	underlying := &optionalCompatibilityWriter{compatibilityWriter: newCompatibilityWriter()}
 	nested := &unwrapCompatibilityWriter{ResponseWriter: &unwrapCompatibilityWriter{ResponseWriter: underlying}}

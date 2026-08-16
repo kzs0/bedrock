@@ -24,16 +24,16 @@ func TestRuntimeCollector(t *testing.T) {
 
 	// Check for specific expected metrics
 	expectedMetrics := map[string]bool{
-		"go_info":                         false,
-		"go_goroutines":                   false,
-		"go_memstats_heap_alloc_bytes":    false,
-		"go_memstats_heap_inuse_bytes":    false,
-		"go_memstats_heap_objects":        false,
-		"go_memstats_stack_inuse_bytes":   false,
-		"go_memstats_mallocs_total":       false,
-		"go_memstats_frees_total":         false,
-		"go_gc_cycles_total":              false,
-		"go_gc_duration_seconds_total":    false,
+		"go_info":                       false,
+		"go_goroutines":                 false,
+		"go_memstats_heap_alloc_bytes":  false,
+		"go_memstats_heap_inuse_bytes":  false,
+		"go_memstats_heap_objects":      false,
+		"go_memstats_stack_inuse_bytes": false,
+		"go_memstats_mallocs_total":     false,
+		"go_memstats_frees_total":       false,
+		"go_gc_cycles_total":            false,
+		"go_gc_duration_seconds_total":  false,
 	}
 
 	for _, fam := range families {

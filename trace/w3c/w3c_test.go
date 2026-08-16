@@ -1,6 +1,7 @@
 package w3c
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -78,6 +79,21 @@ func TestParseTraceparent(t *testing.T) {
 		{
 			name:    "invalid: wrong field count",
 			header:  "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331",
+			wantErr: true,
+		},
+		{
+			name:    "strict compatibility: version 00 rejects extension fields",
+			header:  "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01-extra",
+			wantErr: true,
+		},
+		{
+			name:    "strict compatibility: uppercase version hex is invalid",
+			header:  "0A-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01-extra",
+			wantErr: true,
+		},
+		{
+			name:    "strict compatibility: uppercase flags hex is invalid",
+			header:  "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-0A",
 			wantErr: true,
 		},
 		{
@@ -205,13 +221,9 @@ func TestParseTracestate(t *testing.T) {
 			want:    []Entry{{Key: "tenant@vendor", Value: "value"}},
 		},
 		{
-			name:    "duplicate keys (last wins)",
+			name:    "strict compatibility: duplicate keys invalidate the header",
 			header:  "vendor1=first,vendor2=value2,vendor1=last",
-			wantErr: false,
-			want: []Entry{
-				{Key: "vendor2", Value: "value2"},
-				{Key: "vendor1", Value: "last"},
-			},
+			wantErr: true,
 		},
 		{
 			name:    "with spaces",
@@ -221,6 +233,23 @@ func TestParseTracestate(t *testing.T) {
 				{Key: "vendor1", Value: "value1"},
 				{Key: "vendor2", Value: "value2"},
 			},
+		},
+		{
+			name:    "ABNF compatibility: leading value space is preserved",
+			header:  "key= value",
+			wantErr: false,
+			want:    []Entry{{Key: "key", Value: " value"}},
+		},
+		{
+			name:    "strict compatibility: whitespace before equals is invalid",
+			header:  "key =value",
+			wantErr: true,
+		},
+		{
+			name:    "outer trailing OWS is not value data",
+			header:  "key=value \t",
+			wantErr: false,
+			want:    []Entry{{Key: "key", Value: "value"}},
 		},
 		{
 			name:    "invalid: no equals sign",
@@ -240,6 +269,62 @@ func TestParseTracestate(t *testing.T) {
 		{
 			name:    "invalid: equals in value",
 			header:  "vendor=val=ue",
+			wantErr: true,
+		},
+		{
+			name:    "ABNF compatibility: leading empty member is accepted",
+			header:  ",vendor=value",
+			wantErr: false,
+			want:    []Entry{{Key: "vendor", Value: "value"}},
+		},
+		{
+			name:    "ABNF compatibility: trailing empty member is accepted",
+			header:  "vendor=value,",
+			wantErr: false,
+			want:    []Entry{{Key: "vendor", Value: "value"}},
+		},
+		{
+			name:    "ABNF compatibility: interior empty member is accepted",
+			header:  "vendor=value,,other=value",
+			wantErr: false,
+			want: []Entry{
+				{Key: "vendor", Value: "value"},
+				{Key: "other", Value: "value"},
+			},
+		},
+		{
+			name:    "ABNF compatibility: OWS-only member is accepted",
+			header:  " \t ,\tvendor=value\t,\t",
+			wantErr: false,
+			want:    []Entry{{Key: "vendor", Value: "value"}},
+		},
+		{
+			name:    "strict compatibility: carriage return is not OWS",
+			header:  "\rvendor=value",
+			wantErr: true,
+		},
+		{
+			name:    "strict compatibility: line feed is not OWS",
+			header:  "vendor=value\n",
+			wantErr: true,
+		},
+		{
+			name:    "strict compatibility: Unicode whitespace is not OWS",
+			header:  "\u00a0vendor=value",
+			wantErr: true,
+		},
+		{
+			name:    "512-byte boundary",
+			header:  tracestateAtWireLimit(),
+			wantErr: false,
+			want: []Entry{
+				{Key: "a", Value: strings.Repeat("x", 256)},
+				{Key: "b", Value: strings.Repeat("y", 251)},
+			},
+		},
+		{
+			name:    "strict compatibility: reject 513-byte header",
+			header:  tracestateAtWireLimit() + "z",
 			wantErr: true,
 		},
 	}
@@ -302,6 +387,69 @@ func TestFormatTracestate(t *testing.T) {
 	}
 }
 
+func TestFormatTracestateStrictWireLimits(t *testing.T) {
+	exactEntries := []Entry{
+		{Key: "a", Value: strings.Repeat("x", 256)},
+		{Key: "b", Value: strings.Repeat("y", 251)},
+	}
+	if got := FormatTracestate(exactEntries); got != tracestateAtWireLimit() || len(got) != MaxTracestateLen {
+		t.Fatalf("exact-limit format length = %d, want %d", len(got), MaxTracestateLen)
+	}
+
+	withOverflow := append(append([]Entry(nil), exactEntries...), Entry{Key: "c", Value: "z"})
+	if got := FormatTracestate(withOverflow); got != tracestateAtWireLimit() {
+		t.Fatalf("format appended entry beyond limit: length %d", len(got))
+	}
+	oversizedPart := Entry{Key: "a" + strings.Repeat("k", 255), Value: strings.Repeat("x", 256)}
+	if got := FormatTracestate([]Entry{oversizedPart}); got != "" {
+		t.Fatalf("oversized first entry formatted as %q", got)
+	}
+	if got := FormatTracestate([]Entry{oversizedPart, {Key: "safe", Value: "value"}}); got != "safe=value" {
+		t.Fatalf("entry after oversized first entry was not considered: got %q", got)
+	}
+	if got := FormatTracestate([]Entry{
+		oversizedPart,
+		{Key: oversizedPart.Key, Value: "replacement"},
+		{Key: "safe", Value: "value"},
+	}); got != "safe=value" {
+		t.Fatalf("later duplicate replaced oversized first valid entry: got %q", got)
+	}
+
+	many := make([]Entry, 33)
+	for i := range many {
+		many[i] = Entry{Key: fmt.Sprintf("key%d", i), Value: "v"}
+	}
+	formatted := FormatTracestate(many)
+	parsed, err := ParseTracestate(formatted)
+	if err != nil {
+		t.Fatalf("formatted 32-entry prefix is invalid: %v", err)
+	}
+	if len(parsed) != MaxTracestateEntries {
+		t.Fatalf("formatted entry count = %d, want %d", len(parsed), MaxTracestateEntries)
+	}
+}
+
+func TestFormatTracestateFiltersInvalidAndDuplicateEntries(t *testing.T) {
+	entries := []Entry{
+		{Key: "first", Value: "one"},
+		{Key: "bad\nkey", Value: "injected"},
+		{Key: "badvalue", Value: "line\rbreak"},
+		{Key: "first", Value: "duplicate"},
+		{Key: "second", Value: "two"},
+		{Key: "trailing", Value: "space "},
+	}
+	got := FormatTracestate(entries)
+	if got != "first=one,second=two" {
+		t.Fatalf("FormatTracestate = %q, want filtered valid entries", got)
+	}
+	if strings.ContainsAny(got, "\r\n\x00") {
+		t.Fatalf("FormatTracestate emitted a carrier control: %q", got)
+	}
+	if _, err := ParseTracestate(got); err != nil {
+		t.Fatalf("FormatTracestate produced invalid output: %v", err)
+	}
+}
+
 func TestValidationHelpers(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -311,12 +459,24 @@ func TestValidationHelpers(t *testing.T) {
 	}{
 		{"tracestate key valid simple", "vendor_key-1", IsValidTracestateKey, true},
 		{"tracestate key valid multi-tenant", "tenant@vendor", IsValidTracestateKey, true},
+		{"tracestate key valid digit-leading tenant", "1tenant@vendor", IsValidTracestateKey, true},
+		{"tracestate key valid maximum simple length", "a" + strings.Repeat("1", 255), IsValidTracestateKey, true},
+		{"tracestate key valid maximum tenant and system lengths", "1" + strings.Repeat("a", 240) + "@" + strings.Repeat("b", 14), IsValidTracestateKey, true},
 		{"tracestate key invalid uppercase", "VENDOR", IsValidTracestateKey, false},
 		{"tracestate key invalid empty", "", IsValidTracestateKey, false},
+		{"strict compatibility: simple key cannot start with digit", "1vendor", IsValidTracestateKey, false},
+		{"strict compatibility: simple key cannot start with symbol", "_vendor", IsValidTracestateKey, false},
+		{"strict compatibility: system id cannot start with digit", "tenant@1vendor", IsValidTracestateKey, false},
+		{"strict compatibility: tenant id cannot start with symbol", "_tenant@vendor", IsValidTracestateKey, false},
+		{"tracestate key invalid overlong simple key", "a" + strings.Repeat("1", 256), IsValidTracestateKey, false},
+		{"tracestate key invalid overlong tenant id", "1" + strings.Repeat("a", 241) + "@vendor", IsValidTracestateKey, false},
+		{"tracestate key invalid overlong system id", "tenant@" + strings.Repeat("b", 15), IsValidTracestateKey, false},
 		{"tracestate value valid", "value123-_*", IsValidTracestateValue, true},
+		{"tracestate value valid with leading space", " value", IsValidTracestateValue, true},
 		{"tracestate value invalid comma", "val,ue", IsValidTracestateValue, false},
 		{"tracestate value invalid equals", "val=ue", IsValidTracestateValue, false},
 		{"tracestate value invalid control char", "val\x00ue", IsValidTracestateValue, false},
+		{"tracestate value invalid trailing space", "value ", IsValidTracestateValue, false},
 	}
 
 	for _, tt := range tests {
@@ -327,4 +487,8 @@ func TestValidationHelpers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func tracestateAtWireLimit() string {
+	return "a=" + strings.Repeat("x", 256) + ",b=" + strings.Repeat("y", 251)
 }
