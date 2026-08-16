@@ -1,6 +1,7 @@
 package metric
 
 import (
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,7 +20,7 @@ type Counter struct {
 
 type counterValue struct {
 	labels attr.Set
-	value  atomic.Uint64
+	bits   atomic.Uint64 // Stores float64 as uint64 bits
 }
 
 // With returns a CounterVec with the given label values.
@@ -80,6 +81,9 @@ func (c *Counter) Inc() {
 
 // Add adds the given value to the counter.
 func (c *Counter) Add(v float64) {
+	if v < 0 || math.IsNaN(v) {
+		return
+	}
 	c.With().Add(v)
 }
 
@@ -92,7 +96,7 @@ func (c *Counter) collect() MetricFamily {
 	for _, cv := range c.values {
 		metrics = append(metrics, Metric{
 			Labels: cv.labels,
-			Value:  float64FromUint64(cv.value.Load()),
+			Value:  math.Float64frombits(cv.bits.Load()),
 		})
 	}
 
@@ -111,16 +115,25 @@ type CounterVec struct {
 
 // Inc increments the counter by 1.
 func (cv CounterVec) Inc() {
-	cv.value.value.Add(1)
+	cv.add(1)
 }
 
 // Add adds the given value to the counter.
 func (cv CounterVec) Add(v float64) {
-	if v < 0 {
-		return // Counters can only increase
+	if v < 0 || math.IsNaN(v) {
+		return
 	}
-	// Store as uint64 bits for atomic operations
-	cv.value.value.Add(uint64(v))
+	cv.add(v)
+}
+
+func (cv CounterVec) add(delta float64) {
+	for {
+		oldBits := cv.value.bits.Load()
+		newValue := math.Float64frombits(oldBits) + delta
+		if cv.value.bits.CompareAndSwap(oldBits, math.Float64bits(newValue)) {
+			return
+		}
+	}
 }
 
 // labelsKey creates a unique key from label values.
@@ -145,9 +158,4 @@ func labelsKey(labels []attr.Attr) string {
 		sb.WriteString(a.Value.String())
 	}
 	return sb.String()
-}
-
-// float64FromUint64 converts a uint64 to float64.
-func float64FromUint64(v uint64) float64 {
-	return float64(v)
 }

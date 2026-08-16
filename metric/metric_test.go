@@ -135,6 +135,58 @@ func TestHistogram(t *testing.T) {
 	}
 }
 
+func TestRegistryHistogramDefaultBuckets(t *testing.T) {
+	configured := []float64{2, 4, 8}
+	r := NewRegistryWithBuckets("", configured)
+
+	nilBuckets := r.Histogram("nil_buckets", "Nil buckets", nil)
+	emptyBuckets := r.Histogram("empty_buckets", "Empty buckets", []float64{})
+	nilBuckets.Observe(3)
+	emptyBuckets.Observe(5)
+
+	// The registry must not retain the caller's slice.
+	configured[0] = 99
+
+	families := r.Gather()
+	for _, name := range []string{"nil_buckets", "empty_buckets"} {
+		var got []Bucket
+		for _, family := range families {
+			if family.Name == name {
+				got = family.Metrics[0].Buckets
+				break
+			}
+		}
+		if len(got) != 3 {
+			t.Fatalf("%s: expected 3 configured buckets, got %d", name, len(got))
+		}
+		for i, want := range []float64{2, 4, 8} {
+			if got[i].UpperBound != want {
+				t.Errorf("%s: bucket %d = %v, want %v", name, i, got[i].UpperBound, want)
+			}
+		}
+	}
+}
+
+func TestRegistryHistogramExplicitBucketsOverrideDefaults(t *testing.T) {
+	r := NewRegistryWithBuckets("", []float64{2, 4, 8})
+	explicit := []float64{10, 20}
+	h := r.Histogram("explicit", "Explicit buckets", explicit)
+	h.Observe(15)
+
+	// Histograms must not retain the caller's slice either.
+	explicit[0] = 99
+
+	got := r.Gather()[0].Metrics[0].Buckets
+	if len(got) != 2 {
+		t.Fatalf("expected 2 explicit buckets, got %d", len(got))
+	}
+	for i, want := range []float64{10, 20} {
+		if got[i].UpperBound != want {
+			t.Errorf("bucket %d = %v, want %v", i, got[i].UpperBound, want)
+		}
+	}
+}
+
 func TestRegistryGetOrCreate(t *testing.T) {
 	r := NewRegistry("")
 

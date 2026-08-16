@@ -60,11 +60,14 @@ func New(cfg Config, staticAttrs ...attr.Attr) (*Bedrock, error) {
 	if cfg.LogOutput == nil {
 		cfg.LogOutput = os.Stderr
 	}
+	// Bedrock and its registry own their metric bucket configuration. This keeps
+	// later caller mutations from changing live metric behavior.
+	cfg.MetricBuckets = append([]float64(nil), cfg.MetricBuckets...)
 
 	b := &Bedrock{
 		config:     cfg,
 		staticAttr: attr.NewSet(staticAttrs...),
-		metrics:    metric.NewRegistry(cfg.MetricPrefix),
+		metrics:    metric.NewRegistryWithBuckets(cfg.MetricPrefix, cfg.MetricBuckets),
 	}
 
 	// Pre-build cached slices of static label keys and values (never change after init).

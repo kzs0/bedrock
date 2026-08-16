@@ -78,6 +78,7 @@ func (o operationOnlyOption) applyToOperation(c *operationConfig) {
 		c.metricLabels = append(c.metricLabels, o.labelNames...)
 	case opOptSuccess:
 		c.success = true
+		c.failure = nil
 	case opOptFailure:
 		c.success = false
 		c.failure = o.err
@@ -133,6 +134,7 @@ type endConfig struct {
 func EndSuccess() EndOption {
 	return func(cfg *endConfig) {
 		cfg.success = true
+		cfg.failure = nil
 		cfg.hasOpts = true
 	}
 }
@@ -148,7 +150,10 @@ func EndFailure(err error) EndOption {
 
 // applyOperationOptions applies options to create an operation config.
 func applyOperationOptions(name string, opts []OperationOption) operationConfig {
-	cfg := operationConfig{name: name}
+	cfg := operationConfig{
+		name:    name,
+		success: true,
+	}
 	for _, opt := range opts {
 		opt.applyToOperation(&cfg)
 	}
