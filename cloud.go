@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	defaultCloudEndpoint        = "https://ingest.bedrock.dev"
-	defaultCloudPushInterval    = 15 * time.Second
-	defaultProfileInterval      = 60 * time.Second
-	defaultProfileCPUSampleDur  = 10 * time.Second
+	defaultCloudEndpoint       = "https://ingest.bedrock.dev"
+	defaultCloudPushInterval   = 15 * time.Second
+	defaultProfileInterval     = 60 * time.Second
+	defaultProfileCPUSampleDur = 10 * time.Second
 )
 
 // cloudConfig holds configuration for the Bedrock managed cloud backend.
@@ -84,6 +84,12 @@ func WithCloud(apiKey string, opts ...CloudOption) InitOption {
 		for _, o := range opts {
 			o(cc)
 		}
+		if cc.pushInterval <= 0 {
+			cc.pushInterval = defaultCloudPushInterval
+		}
+		if cc.profileInterval <= 0 {
+			cc.profileInterval = defaultProfileInterval
+		}
 		c.cloudCfg = cc
 	}
 }
@@ -102,7 +108,19 @@ func wireCloud(b *Bedrock, cc *cloudConfig, logger *slog.Logger) func(context.Co
 		ServiceName: b.config.Service,
 		Resource:    b.staticAttr,
 	})
-	retryExp := &retryExporter{base: cloudGRPC, maxRetries: 3, logger: logger}
+	return wireCloudWithTraceExporter(b, cc, logger, cloudGRPC)
+}
+
+// wireCloudWithTraceExporter wires an already constructed cloud trace
+// exporter. Bedrock owns exporter shutdown so its batch processor can flush
+// before the exporter is closed.
+func wireCloudWithTraceExporter(
+	b *Bedrock,
+	cc *cloudConfig,
+	logger *slog.Logger,
+	cloudTrace trace.Exporter,
+) func(context.Context) {
+	retryExp := &retryExporter{base: cloudTrace, maxRetries: 3, logger: logger}
 
 	// Fan-out: keep local exporter if one exists, add cloud.
 	var topExp trace.Exporter
@@ -131,10 +149,23 @@ func wireCloud(b *Bedrock, cc *cloudConfig, logger *slog.Logger) func(context.Co
 	stopProfiles := startProfilePush(b.config.Service, b.staticAttr, logger, *cc)
 
 	return func(ctx context.Context) {
-		stopMetrics(ctx)
-		stopProfiles(ctx)
-		_ = cloudGRPC.Shutdown(ctx)
+		stopCloudWorkers(ctx, stopMetrics, stopProfiles)
 	}
+}
+
+func stopCloudWorkers(
+	ctx context.Context,
+	stopMetrics func(context.Context),
+	stopProfiles func(context.Context),
+) {
+	// Signal profile cancellation before the potentially slow final metrics
+	// push. A canceled context makes this first call non-blocking while still
+	// triggering the profile worker's one-shot cancellation.
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stopProfiles(cancelCtx)
+	stopMetrics(ctx)
+	stopProfiles(ctx)
 }
 
 // cloudGRPCEndpoint converts a URL like "https://ingest.bedrock.dev" to a bare
@@ -230,4 +261,3 @@ func (f *fanOutExporter) Shutdown(ctx context.Context) error {
 	}
 	return firstErr
 }
-

@@ -5,8 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,100 +15,226 @@ import (
 	"github.com/kzs0/bedrock/metric"
 )
 
-// TestMetricsPush_Headers verifies the correct Content-Type and Authorization
-// headers are sent with metric push requests.
 func TestMetricsPush_Headers(t *testing.T) {
-	var (
-		gotContentType string
-		gotAuth        string
-	)
+	type headers struct {
+		contentType string
+		auth        string
+	}
+	received := make(chan headers, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotContentType = r.Header.Get("Content-Type")
-		gotAuth = r.Header.Get("Authorization")
+		received <- headers{
+			contentType: r.Header.Get("Content-Type"),
+			auth:        r.Header.Get("Authorization"),
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	reg := metric.NewRegistry("")
-	cfg := cloudConfig{
+	stop := startMetricsPush(metric.NewRegistry(""), nil, cloudConfig{
 		apiKey:       "test-key",
 		endpoint:     srv.URL,
-		pushInterval: 50 * time.Millisecond,
-	}
-	stop := startMetricsPush(reg, nil, cfg)
-	time.Sleep(100 * time.Millisecond)
-	stop(context.Background())
+		pushInterval: 24 * time.Hour,
+	})
+	stop(testContext(t))
 
-	if !strings.HasPrefix(gotContentType, "text/plain") {
-		t.Errorf("expected text/plain content-type, got %q", gotContentType)
+	got := receiveTestValue(t, received)
+	if !strings.HasPrefix(got.contentType, "text/plain") {
+		t.Errorf("expected text/plain content-type, got %q", got.contentType)
 	}
-	if gotAuth != "Bearer test-key" {
-		t.Errorf("expected 'Bearer test-key', got %q", gotAuth)
+	if got.auth != "Bearer test-key" {
+		t.Errorf("expected 'Bearer test-key', got %q", got.auth)
 	}
 }
 
-// TestMetricsPush_ContainsMetrics verifies that a registered counter appears
-// in the push payload.
 func TestMetricsPush_ContainsMetrics(t *testing.T) {
-	var body string
+	body := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		body = string(b)
+		contents, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		body <- string(contents)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
 	reg := metric.NewRegistry("")
-	counter := reg.Counter("test_requests_total", "test counter", "method")
-	counter.With(attr.String("method", "GET")).Inc()
+	reg.Counter("test_requests_total", "test counter", "method").
+		With(attr.String("method", "GET")).Inc()
+	stop := startMetricsPush(reg, nil, cloudConfig{
+		apiKey:       "key",
+		endpoint:     srv.URL,
+		pushInterval: 24 * time.Hour,
+	})
+	stop(testContext(t))
 
-	cfg := cloudConfig{
+	if got := receiveTestValue(t, body); !strings.Contains(got, "test_requests_total") {
+		t.Errorf("expected test_requests_total in push body, got:\n%s", got)
+	}
+}
+
+func TestMetricsPush_PeriodicRequestHasBoundedLifetime(t *testing.T) {
+	started := make(chan struct{}, 1)
+	canceled := make(chan error, 1)
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			started <- struct{}{}
+			<-r.Context().Done()
+			canceled <- r.Context().Err()
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	stop := startMetricsPush(metric.NewRegistry(""), nil, cloudConfig{
 		apiKey:       "key",
 		endpoint:     srv.URL,
 		pushInterval: 50 * time.Millisecond,
+	})
+	receiveTestValue(t, started)
+	if err := receiveTestValue(t, canceled); err == nil {
+		t.Fatal("periodic request context was not canceled at its deadline")
 	}
-	stop := startMetricsPush(reg, nil, cfg)
-	time.Sleep(100 * time.Millisecond)
-	stop(context.Background())
+	stop(testContext(t))
+}
 
-	if !strings.Contains(body, "test_requests_total") {
-		t.Errorf("expected test_requests_total in push body, got:\n%s", body)
+func TestMetricsPush_StopCancelsPeriodicAndCallerCanBoundFinalWait(t *testing.T) {
+	periodicStarted := make(chan struct{}, 1)
+	periodicCanceled := make(chan struct{}, 1)
+	finalStarted := make(chan struct{}, 1)
+	finalRelease := make(chan struct{})
+	finalFinished := make(chan struct{}, 1)
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			periodicStarted <- struct{}{}
+			<-r.Context().Done()
+			periodicCanceled <- struct{}{}
+			return
+		}
+
+		finalStarted <- struct{}{}
+		<-finalRelease
+		w.WriteHeader(http.StatusOK)
+		finalFinished <- struct{}{}
+	}))
+	defer srv.Close()
+
+	stop := startMetricsPush(metric.NewRegistry(""), nil, cloudConfig{
+		apiKey:       "key",
+		endpoint:     srv.URL,
+		pushInterval: 100 * time.Millisecond,
+	})
+	receiveTestValue(t, periodicStarted)
+
+	stopCtx, cancelStop := context.WithCancel(context.Background())
+	defer cancelStop()
+	stopDone := make(chan struct{})
+	go func() {
+		stop(stopCtx)
+		close(stopDone)
+	}()
+
+	receiveTestValue(t, periodicCanceled)
+	receiveTestValue(t, finalStarted)
+	cancelStop()
+	receiveTestValue(t, stopDone)
+	close(finalRelease)
+	receiveTestValue(t, finalFinished)
+	stop(testContext(t))
+
+	if got := requests.Load(); got != 2 {
+		t.Errorf("request count = %d, want one canceled periodic and one final push", got)
 	}
 }
 
-// TestMetricsPush_Backpressure verifies that a slow server does not cause
-// goroutine accumulation when the tick interval is shorter than push latency.
-func TestMetricsPush_Backpressure(t *testing.T) {
-	goroutinesBefore := runtime.NumGoroutine()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(200 * time.Millisecond) // slower than tick interval
+func TestMetricsPush_StopDeadlineBoundsNonCooperativeCollection(t *testing.T) {
+	collector := &firstBlockingCollector{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	registry := metric.NewRegistry("")
+	registry.RegisterCollector(collector)
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	reg := metric.NewRegistry("")
-	cfg := cloudConfig{
+	stop := startMetricsPush(registry, nil, cloudConfig{
 		apiKey:       "key",
 		endpoint:     srv.URL,
 		pushInterval: 10 * time.Millisecond,
+	})
+	receiveTestValue(t, collector.started)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	firstStopDone := make(chan struct{})
+	go func() {
+		stop(canceled)
+		close(firstStopDone)
+	}()
+	receiveTestValue(t, firstStopDone)
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("requests before blocked collection release = %d, want 0", got)
 	}
-	stop := startMetricsPush(reg, nil, cfg)
-	time.Sleep(150 * time.Millisecond) // multiple ticks, but server is slow
-	stop(context.Background())
 
-	// Allow any lingering goroutine to wind down.
-	time.Sleep(50 * time.Millisecond)
-
-	goroutinesAfter := runtime.NumGoroutine()
-	// Allow a small margin for other test-related goroutines.
-	if goroutinesAfter > goroutinesBefore+10 {
-		t.Errorf("possible goroutine leak: before=%d after=%d", goroutinesBefore, goroutinesAfter)
+	close(collector.release)
+	stop(testContext(t))
+	if got := requests.Load(); got != 1 {
+		t.Errorf("requests = %d, want exactly one final push", got)
+	}
+	if got := collector.calls.Load(); got != 2 {
+		t.Errorf("collector calls = %d, want one periodic and one final collection", got)
 	}
 }
 
-// TestMetricsPush_ErrorResponse verifies that a non-2xx server response is
-// treated as a failure (the push function logs a warning and does not panic).
+func TestMetricsPush_StopIsConcurrentAndIdempotent(t *testing.T) {
+	requestStarted := make(chan struct{}, 1)
+	releaseRequest := make(chan struct{})
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		requestStarted <- struct{}{}
+		<-releaseRequest
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	stop := startMetricsPush(metric.NewRegistry(""), nil, cloudConfig{
+		apiKey:       "key",
+		endpoint:     srv.URL,
+		pushInterval: 24 * time.Hour,
+	})
+
+	const callers = 16
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for range callers {
+		go func() {
+			defer wg.Done()
+			stop(context.Background())
+		}()
+	}
+
+	receiveTestValue(t, requestStarted)
+	close(releaseRequest)
+	waitForTestGroup(t, &wg)
+	if got := requests.Load(); got != 1 {
+		t.Errorf("request count = %d, want exactly one final push", got)
+	}
+
+	stop(context.Background())
+	if got := requests.Load(); got != 1 {
+		t.Errorf("request count after repeated stop = %d, want 1", got)
+	}
+}
+
 func TestMetricsPush_ErrorResponse(t *testing.T) {
 	var requestCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -117,40 +243,58 @@ func TestMetricsPush_ErrorResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	reg := metric.NewRegistry("")
-	cfg := cloudConfig{
+	stop := startMetricsPush(metric.NewRegistry(""), nil, cloudConfig{
 		apiKey:       "key",
 		endpoint:     srv.URL,
 		pushInterval: 24 * time.Hour,
-	}
-	stop := startMetricsPush(reg, nil, cfg)
-	stop(context.Background()) // final push triggers the 500 response
-
-	if requestCount.Load() < 1 {
-		t.Error("expected at least one push attempt")
+	})
+	stop(testContext(t))
+	if got := requestCount.Load(); got != 1 {
+		t.Errorf("request count = %d, want 1", got)
 	}
 }
 
-// TestMetricsPush_FinalPushOnStop verifies that stop() triggers exactly one
-// final push even when the ticker has not fired yet.
-func TestMetricsPush_FinalPushOnStop(t *testing.T) {
-	var requestCount atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+func testContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
 
-	reg := metric.NewRegistry("")
-	cfg := cloudConfig{
-		apiKey:       "key",
-		endpoint:     srv.URL,
-		pushInterval: 24 * time.Hour, // effectively disabled
+func receiveTestValue[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case value := <-ch:
+		return value
+	case <-timer.C:
+		t.Fatal("timed out waiting for test event")
+		var zero T
+		return zero
 	}
-	stop := startMetricsPush(reg, nil, cfg)
-	stop(context.Background()) // final push should fire immediately
+}
 
-	if requestCount.Load() < 1 {
-		t.Error("expected at least one push request on stop")
+func waitForTestGroup(t *testing.T, wg *sync.WaitGroup) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	receiveTestValue(t, done)
+}
+
+type firstBlockingCollector struct {
+	started chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (c *firstBlockingCollector) Collect() {
+	if c.calls.Add(1) != 1 {
+		return
 	}
+	close(c.started)
+	<-c.release
 }

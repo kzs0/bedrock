@@ -2,6 +2,7 @@ package bedrock
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"sync"
@@ -46,6 +47,11 @@ type Bedrock struct {
 	runtimeCollector *metric.RuntimeCollector
 
 	isNoop bool // true if this is a noop instance
+
+	shutdownOnce     sync.Once
+	shutdownFinalize sync.Once
+	shutdownDone     chan struct{}
+	shutdownErr      error
 }
 
 // New creates a new Bedrock instance with the given configuration.
@@ -224,20 +230,44 @@ func (b *Bedrock) getOpMetrics(name string, metricLabels []string) *cachedOpMetr
 
 // Shutdown gracefully shuts down all components.
 func (b *Bedrock) Shutdown(ctx context.Context) error {
+	b.shutdownOnce.Do(func() {
+		b.shutdownDone = make(chan struct{})
+	})
+
+	select {
+	case <-b.shutdownDone:
+		return b.shutdownErr
+	default:
+	}
+
+	var drainErr error
 	if b.batchProcessor != nil {
-		if err := b.batchProcessor.Shutdown(ctx); err != nil {
-			return err
+		drainErr = b.batchProcessor.Shutdown(ctx)
+		if ctx.Err() != nil {
+			// The processor owns the in-progress drain. A later caller with a
+			// live context can resume waiting and safely finalize the exporter.
+			return errors.Join(drainErr, ctx.Err())
 		}
 	}
-	if b.rawExporter != nil {
-		if err := b.rawExporter.Shutdown(ctx); err != nil {
-			return err
-		}
+
+	b.shutdownFinalize.Do(func() {
+		go func() {
+			var exporterErr error
+			switch {
+			case b.rawExporter != nil:
+				exporterErr = b.rawExporter.Shutdown(ctx)
+			case b.batchProcessor == nil && b.tracer != nil:
+				exporterErr = b.tracer.Shutdown(ctx)
+			}
+			b.shutdownErr = errors.Join(drainErr, exporterErr)
+			close(b.shutdownDone)
+		}()
+	})
+
+	select {
+	case <-b.shutdownDone:
+		return b.shutdownErr
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	if b.tracer != nil {
-		if err := b.tracer.Shutdown(ctx); err != nil {
-			return err
-		}
-	}
-	return nil
 }

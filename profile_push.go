@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/pprof"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/kzs0/bedrock/attr"
@@ -37,55 +37,108 @@ func startProfilePush(
 	cfg cloudConfig,
 ) func(ctx context.Context) {
 	endpoint := cfg.endpoint + "/v1/profiles"
-	ticker := time.NewTicker(cfg.profileInterval)
-	done := make(chan struct{})
-	var collecting atomic.Bool
-
-	collect := func() {
-		if !collecting.CompareAndSwap(false, true) {
-			return // previous collection still running, skip
-		}
-		defer collecting.Store(false)
-
-		profiles := []ProfileType{ProfileTypeCPU, ProfileTypeHeap, ProfileTypeGoroutine, ProfileTypeMutex}
-		for _, pt := range profiles {
-			if err := collectAndPushProfile(service, resource, endpoint, cfg.apiKey, cfg.profileCPUSampleDur, pt); err != nil {
-				if logger != nil {
-					logger.Warn("profile push failed",
-						slog.String("type", string(pt)),
-						slog.String("error", err.Error()),
-					)
-				}
-			}
-		}
+	profileInterval := cfg.profileInterval
+	if profileInterval <= 0 {
+		profileInterval = defaultProfileInterval
 	}
+	ticker := time.NewTicker(profileInterval)
+
+	collect := func(ctx context.Context, pt ProfileType) error {
+		return collectAndPushProfile(ctx, service, resource, endpoint, cfg.apiKey, cfg.profileCPUSampleDur, pt)
+	}
+	return startProfilePushWorker(ticker.C, ticker.Stop, logger, collect)
+}
+
+type collectProfileFunc func(context.Context, ProfileType) error
+
+// startProfilePushWorker runs at most one profile collection at a time. The
+// ticker and collector are injected so lifecycle behavior can be tested
+// deterministically without relying on wall-clock sleeps.
+func startProfilePushWorker(
+	ticks <-chan time.Time,
+	stopTicker func(),
+	logger *slog.Logger,
+	collect collectProfileFunc,
+) func(context.Context) {
+	workerCtx, cancel := context.WithCancel(context.Background())
+	workerDone := make(chan struct{})
+	var stopOnce sync.Once
 
 	go func() {
-		defer ticker.Stop()
+		defer close(workerDone)
+		if stopTicker != nil {
+			defer stopTicker()
+		}
+
+		var collectionDone <-chan struct{}
 		for {
 			select {
-			case <-ticker.C:
-				go collect() // run collection in separate goroutine to not block ticker
-			case <-done:
+			case _, ok := <-ticks:
+				if !ok {
+					ticks = nil
+					continue
+				}
+				if collectionDone != nil {
+					continue // previous collection still running, skip this tick
+				}
+				done := make(chan struct{})
+				collectionDone = done
+				go func() {
+					defer close(done)
+					profiles := []ProfileType{ProfileTypeCPU, ProfileTypeHeap, ProfileTypeGoroutine, ProfileTypeMutex}
+					for _, pt := range profiles {
+						if workerCtx.Err() != nil {
+							return
+						}
+						if err := collect(workerCtx, pt); err != nil {
+							if workerCtx.Err() != nil {
+								return
+							}
+							if logger != nil {
+								logger.Warn("profile push failed",
+									slog.String("type", string(pt)),
+									slog.String("error", err.Error()),
+								)
+							}
+						}
+					}
+				}()
+			case <-collectionDone:
+				collectionDone = nil
+			case <-workerCtx.Done():
+				if collectionDone != nil {
+					<-collectionDone
+				}
 				return
 			}
 		}
 	}()
 
-	return func(_ context.Context) {
-		close(done)
-		// Best-effort: no wait for in-flight collection (profiles are non-critical).
+	return func(ctx context.Context) {
+		stopOnce.Do(cancel)
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		select {
+		case <-workerDone:
+		case <-ctx.Done():
+		}
 	}
 }
 
 // collectAndPushProfile collects one profile type and pushes it to the endpoint.
 func collectAndPushProfile(
+	ctx context.Context,
 	service string,
 	resource attr.Set,
 	endpoint, apiKey string,
 	cpuSampleDur time.Duration,
 	pt ProfileType,
 ) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	start := time.Now()
 	var buf bytes.Buffer
 
@@ -94,8 +147,11 @@ func collectAndPushProfile(
 		if err := pprof.StartCPUProfile(&buf); err != nil {
 			return fmt.Errorf("cpu profile start: %w", err)
 		}
-		time.Sleep(cpuSampleDur)
+		waitErr := waitForProfileSample(ctx, cpuSampleDur)
 		pprof.StopCPUProfile()
+		if waitErr != nil {
+			return fmt.Errorf("cpu profile wait: %w", waitErr)
+		}
 
 	case ProfileTypeHeap:
 		p := pprof.Lookup("heap")
@@ -127,15 +183,18 @@ func collectAndPushProfile(
 	default:
 		return fmt.Errorf("unknown profile type: %s", pt)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	end := time.Now()
 
 	encoded := otlp.EncodeProfile(service, resource, string(pt), buf.Bytes(), start, end)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(encoded))
 	if err != nil {
 		return fmt.Errorf("profile request: %w", err)
 	}
@@ -153,4 +212,15 @@ func collectAndPushProfile(
 		return fmt.Errorf("profile push: unexpected status %d for type %s", resp.StatusCode, pt)
 	}
 	return nil
+}
+
+func waitForProfileSample(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

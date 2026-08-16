@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -230,6 +231,56 @@ func TestWithCloud_CustomIntervals(t *testing.T) {
 	}
 }
 
+func TestWithCloud_NonPositiveIntervalsUseDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		duration time.Duration
+	}{
+		{name: "zero", duration: 0},
+		{name: "negative", duration: -time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &initConfig{}
+			WithCloud("key",
+				CloudPushInterval(tc.duration),
+				CloudProfileInterval(tc.duration),
+			)(cfg)
+
+			if got := cfg.cloudCfg.pushInterval; got != defaultCloudPushInterval {
+				t.Errorf("push interval = %v, want %v", got, defaultCloudPushInterval)
+			}
+			if got := cfg.cloudCfg.profileInterval; got != defaultProfileInterval {
+				t.Errorf("profile interval = %v, want %v", got, defaultProfileInterval)
+			}
+		})
+	}
+}
+
+func TestStopCloudWorkersCancelsProfilesBeforeMetrics(t *testing.T) {
+	var events []string
+	stopProfiles := func(ctx context.Context) {
+		if ctx.Err() != nil {
+			events = append(events, "cancel profiles")
+			return
+		}
+		events = append(events, "join profiles")
+	}
+	stopMetrics := func(context.Context) {
+		events = append(events, "stop metrics")
+	}
+
+	stopCloudWorkers(context.Background(), stopMetrics, stopProfiles)
+	want := []string{"cancel profiles", "stop metrics", "join profiles"}
+	if len(events) != len(want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("events = %v, want %v", events, want)
+		}
+	}
+}
+
 // ── fanOutExporter Shutdown ───────────────────────────────────────────────────
 
 func TestFanOutExporter_Shutdown_CallsBoth(t *testing.T) {
@@ -253,6 +304,68 @@ func TestFanOutExporter_Shutdown_ReturnsFirstError(t *testing.T) {
 		t.Fatal("expected error from failing exporter")
 	}
 	// The second exporter should still have been asked to shut down.
+}
+
+func TestWireCloudLeavesTraceShutdownToBedrock(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	b, err := New(Config{Service: "test"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cloudTrace := &lifecycleExporter{}
+	cfg := &cloudConfig{
+		apiKey:              "key",
+		endpoint:            srv.URL,
+		pushInterval:        24 * time.Hour,
+		profileInterval:     24 * time.Hour,
+		profileCPUSampleDur: time.Millisecond,
+	}
+	stopWorkers := wireCloudWithTraceExporter(b, cfg, nil, cloudTrace)
+
+	ctx := WithBedrock(context.Background(), b)
+	op, _ := Operation(ctx, "cloud.lifecycle")
+	op.Done()
+
+	stopWorkers(context.Background())
+	if events := cloudTrace.snapshot(); len(events) != 0 {
+		t.Fatalf("cloud worker stop touched trace exporter: events %v", events)
+	}
+
+	if err := b.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Bedrock.Shutdown: %v", err)
+	}
+	if events := cloudTrace.snapshot(); len(events) != 2 || events[0] != "export" || events[1] != "shutdown" {
+		t.Fatalf("trace lifecycle events = %v, want [export shutdown]", events)
+	}
+}
+
+type lifecycleExporter struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (e *lifecycleExporter) ExportSpans(context.Context, []*trace.Span) error {
+	e.mu.Lock()
+	e.events = append(e.events, "export")
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *lifecycleExporter) Shutdown(context.Context) error {
+	e.mu.Lock()
+	e.events = append(e.events, "shutdown")
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *lifecycleExporter) snapshot() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.events...)
 }
 
 // failingShutdownExporter is an exporter whose Shutdown always returns an error.
@@ -292,4 +405,3 @@ func TestRetryExporter_ContextCanceled_AbortsRetries(t *testing.T) {
 		t.Errorf("expected few calls due to cancellation, got %d", calls)
 	}
 }
-
