@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,14 +40,18 @@ type GRPCExporterConfig struct {
 }
 
 // GRPCExporter exports spans to an OTLP collector via gRPC over HTTP/2.
-// It uses only the Go standard library: cleartext h2c (via internal/h2c)
-// for non-TLS endpoints, and net/http's built-in HTTP/2 for TLS endpoints.
+// It uses only the Go standard library and the internal HTTP/2 transport for
+// both cleartext h2c and TLS with ALPN.
 type GRPCExporter struct {
 	cfg    GRPCExporterConfig
 	client *h2c.Client
+	cfgErr error
 
-	mu      sync.Mutex
-	stopped bool
+	mu           sync.Mutex
+	stopped      bool
+	exports      sync.WaitGroup
+	shutdownOnce sync.Once
+	shutdownDone chan struct{}
 }
 
 // NewGRPCExporter creates a new OTLP gRPC exporter.
@@ -54,19 +59,33 @@ func NewGRPCExporter(cfg GRPCExporterConfig) *GRPCExporter {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 10 * time.Second
 	}
+	headers, cfgErr := copyGRPCHeaders(cfg.Headers)
+	cfg.Headers = headers
 	return &GRPCExporter{
-		cfg:    cfg,
-		client: h2c.NewClient(cfg.Endpoint, !cfg.Insecure, cfg.Timeout),
+		cfg: cfg, client: h2c.NewClient(cfg.Endpoint, !cfg.Insecure, cfg.Timeout),
+		cfgErr: cfgErr, shutdownDone: make(chan struct{}),
 	}
 }
 
 // ExportSpans implements trace.Exporter.
 func (e *GRPCExporter) ExportSpans(ctx context.Context, spans []*trace.Span) error {
 	e.mu.Lock()
-	stopped := e.stopped
-	e.mu.Unlock()
-	if stopped || len(spans) == 0 {
+	if e.stopped || len(spans) == 0 {
+		e.mu.Unlock()
 		return nil
+	}
+	e.exports.Add(1)
+	e.mu.Unlock()
+	defer e.exports.Done()
+
+	if e.cfgErr != nil {
+		return e.cfgErr
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	// Encode spans to OTLP protobuf
@@ -82,7 +101,7 @@ func (e *GRPCExporter) ExportSpans(ctx context.Context, spans []*trace.Span) err
 	binary.BigEndian.PutUint32(grpcFrame[1:], uint32(len(protoBytes)))
 	copy(grpcFrame[5:], protoBytes)
 
-	_, err = e.client.Do(otlpGRPCPath, grpcFrame, e.cfg.Headers)
+	_, err = e.client.DoContext(ctx, otlpGRPCPath, grpcFrame, e.cfg.Headers)
 	if err != nil {
 		return fmt.Errorf("otlp/grpc: export: %w", err)
 	}
@@ -94,6 +113,63 @@ func (e *GRPCExporter) Shutdown(ctx context.Context) error {
 	e.mu.Lock()
 	e.stopped = true
 	e.mu.Unlock()
-	e.client.Shutdown()
-	return nil
+	e.shutdownOnce.Do(func() {
+		go func() {
+			e.exports.Wait()
+			e.client.Shutdown()
+			close(e.shutdownDone)
+		}()
+	})
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-e.shutdownDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func copyGRPCHeaders(headers map[string]string) (map[string]string, error) {
+	if headers == nil {
+		return nil, nil
+	}
+	copy := make(map[string]string, len(headers))
+	for name, value := range headers {
+		lower := strings.ToLower(name)
+		if !validGRPCMetadataName(lower) || !validGRPCMetadataValue(value) {
+			return nil, fmt.Errorf("otlp/grpc: invalid metadata %q", name)
+		}
+		if _, exists := copy[lower]; exists {
+			return nil, fmt.Errorf("otlp/grpc: duplicate metadata %q", lower)
+		}
+		copy[lower] = value
+	}
+	return copy, nil
+}
+
+func validGRPCMetadataValue(value string) bool {
+	for _, ch := range value {
+		if ch < 0x20 || ch > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func validGRPCMetadataName(name string) bool {
+	if name == "" || strings.HasPrefix(name, ":") {
+		return false
+	}
+	switch name {
+	case "connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "content-type", "te":
+		return false
+	}
+	for _, ch := range name {
+		if (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9') && ch != '-' && ch != '_' && ch != '.' {
+			return false
+		}
+	}
+	return true
 }
