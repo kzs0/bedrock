@@ -162,7 +162,10 @@ func TestNoopOperationDoneDoesNotApplyEndOptions(t *testing.T) {
 
 func TestOperationDoneMethodValueCompatibility(t *testing.T) {
 	op, _ := Operation(context.Background(), "noop")
-	var done func() = op.Done
+	callOperationDone(op.Done)
+}
+
+func callOperationDone(done func()) {
 	done()
 }
 
