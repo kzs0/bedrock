@@ -88,3 +88,22 @@ func TestHandler_Histogram(t *testing.T) {
 		t.Error("expected histogram in response")
 	}
 }
+
+func TestHandler_InvalidHistogramConfigurationReturnsError(t *testing.T) {
+	r := metric.NewRegistryWithBuckets("", []float64{10, 5})
+	r.Histogram("latency", "Latency", nil).Observe(7)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rr := httptest.NewRecorder()
+	Handler(r).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+	if !strings.Contains(rr.Body.String(), "not strictly increasing") {
+		t.Fatalf("body = %q, want histogram validation error", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "# TYPE") {
+		t.Fatalf("handler exposed partial metrics before validation error: %q", rr.Body.String())
+	}
+}

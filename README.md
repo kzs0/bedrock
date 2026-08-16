@@ -54,6 +54,7 @@ An opinionated observability library for Go that provides tracing, metrics, prof
   - [Canonical Logging](#canonical-logging-1)
 - [Metrics](#metrics)
 - [Full-Stack Observability](#full-stack-observability)
+- [Development, Compatibility, and Support](#development-compatibility-and-support)
 - [Design Principles](#design-principles)
 - [License](#license)
 
@@ -1173,6 +1174,13 @@ process_user_duration_ms_count{user_id="123",status="active",env="production"} 1
 
 **Note**: Static attributes (e.g., `env="production"`) are automatically added to all metrics.
 
+Prometheus encoding validates the complete gathered snapshot before writing.
+Histogram bucket bounds must be finite and strictly increasing; cumulative
+bucket counts must be monotonic and cannot exceed the total count. Invalid
+custom bucket configuration therefore makes `prometheus.Encode` return an
+error, and the built-in `/metrics` handler responds with HTTP 500 without a
+partial exposition. Validate custom buckets during configuration rollout.
+
 **Observability Server**:
 
 The observability server provides metrics and health checks by default. Profiling
@@ -1295,6 +1303,33 @@ go tool pprof goroutine.prof
 - `config/promtail.yml` - Log collection config
 - `config/pyroscope.yml` - Profiling config
 - `grafana/datasources/` - Pre-configured data sources
+
+## Development, Compatibility, and Support
+
+Bedrock requires Go 1.24 or newer. CI builds and runs race-enabled tests on Go
+1.24, builds and runs ordinary tests on Go 1.24 and 1.25, and separately checks
+80% aggregate coverage, formatting, vet, lint, the nested `bench` module, and
+known vulnerabilities. Before opening a pull request, run:
+
+```bash
+go build ./...
+make ci
+```
+
+The aggregate `make ci` target requires Go 1.25 because of the pinned
+vulnerability scanner; the library itself retains its Go 1.24 baseline.
+
+The module is pre-1.0, so minor releases can include intentional API or
+behavior changes. Review [CHANGELOG.md](CHANGELOG.md) before upgrading,
+especially for configuration validation, telemetry values, network exposure,
+and shutdown behavior. Pushing a valid semantic-version tag on `main` runs the
+full release verification and creates a GitHub Release automatically; tags with
+a prerelease suffix create prereleases.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and release workflow.
+Use the [issue tracker](https://github.com/kzs0/bedrock/issues) for reproducible
+bugs and focused feature requests. Report suspected vulnerabilities privately
+according to [SECURITY.md](SECURITY.md).
 
 ## Design Principles
 

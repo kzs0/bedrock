@@ -14,46 +14,102 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          go-version: "1.24"
+          # Tests execute pull-request code; do not leave the comment-capable
+          # token in the checkout's git configuration.
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24.13"
           cache: true
 
-      # -race: data race detection
       # -count=1: bypass test result cache
       # -coverprofile: per-statement coverage for all packages
       - name: Run tests
         id: tests
         run: |
           set +e
-          go test -json -race -count=1 \
+          : > test-diagnostics.txt
+          package_output=$(go list ./... 2>&1)
+          list_status=$?
+          if (( list_status != 0 )); then
+            printf '%s\n' "$package_output" > test-diagnostics.txt
+            cat test-diagnostics.txt >&2
+            : > test-results.json
+            echo "exit_code=$list_status" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          packages=()
+          while IFS= read -r package; do
+            case "$package" in
+              */example|*/example/*) ;;
+              *) packages+=("$package") ;;
+            esac
+          done <<< "$package_output"
+          if (( ${#packages[@]} == 0 )); then
+            echo "go list returned no non-example packages" | tee test-diagnostics.txt >&2
+            : > test-results.json
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          go test -json -count=1 \
             -coverprofile=coverage.out \
             -covermode=atomic \
-            ./... > test-results.json 2>&1
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+            "${packages[@]}" > test-results.json 2>&1
+          test_status=$?
+          cat test-results.json
+          echo "exit_code=$test_status" >> "$GITHUB_OUTPUT"
 
       - name: Generate coverage summary
         run: go tool cover -func=coverage.out > coverage.txt 2>/dev/null || touch coverage.txt
 
+      - name: Check aggregate coverage
+        id: coverage
+        run: |
+          set +e
+          ./scripts/enforce-coverage.sh coverage.out 80.0
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
       # Parse test-results.json (NDJSON from go test -json), build a markdown
       # summary, and post it as a PR comment — updating any previous one.
       - name: Post test report comment
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        # Fork pull requests receive a read-only token. Reporting must not mask
+        # the authoritative test/coverage gate when commenting is unavailable.
+        continue-on-error: true
+        env:
+          TEST_EXIT_CODE: ${{ steps.tests.outputs.exit_code }}
+          COVERAGE_EXIT_CODE: ${{ steps.coverage.outputs.exit_code }}
         with:
           script: |
             const fs = require('fs');
 
             // ── Parse NDJSON ────────────────────────────────────────────────
             let events = [];
+            const diagnostics = [];
             try {
-              events = fs.readFileSync('test-results.json', 'utf8')
-                .trim().split('\n')
-                .flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } });
+              const discoveryDiagnostics = fs.readFileSync('test-diagnostics.txt', 'utf8').trim();
+              if (discoveryDiagnostics) diagnostics.push(discoveryDiagnostics);
+            } catch (e) {
+              core.warning(`test-diagnostics.txt unreadable: ${e.message}`);
+            }
+            try {
+              for (const line of fs.readFileSync('test-results.json', 'utf8').trim().split('\n')) {
+                if (!line) continue;
+                try {
+                  events.push(JSON.parse(line));
+                } catch {
+                  diagnostics.push(line);
+                }
+              }
             } catch (e) {
               core.warning(`test-results.json unreadable: ${e.message}`);
             }
+            diagnostics.push(...events.filter(ev => ev.Action === 'output' && ev.Output).map(ev => ev.Output));
 
             // ── Aggregate per package ───────────────────────────────────────
             const pkgs = {};          // pkg → { pass, fail, skip, elapsed, status, cov }
@@ -95,8 +151,9 @@ jobs:
               totalFail += p.fail;
               totalSkip += p.skip;
             }
-            const anyFailed = Object.values(pkgs).some(p => p.status === 'fail')
-              || totalFail > 0;
+            const testExit = Number.parseInt(process.env.TEST_EXIT_CODE ?? '1', 10);
+            const coverageExit = Number.parseInt(process.env.COVERAGE_EXIT_CODE ?? '1', 10);
+            const anyFailed = testExit !== 0 || coverageExit !== 0;
 
             // ── Parse function-level coverage (go tool cover -func output) ──
             const mod = 'github.com/kzs0/bedrock';
@@ -172,14 +229,13 @@ jobs:
             });
 
             // ── Compose body ────────────────────────────────────────────────
-            const headline  = anyFailed ? '## ❌ Tests Failed' : '## ✅ Tests Passed';
+            const headline  = anyFailed ? '## ❌ Tests or Coverage Failed' : '## ✅ Tests and Coverage Passed';
             const summary   = [
               `**${totalPass + totalFail + totalSkip}** tests run`,
               `**${totalPass}** passed`,
               `**${totalFail}** failed`,
               `**${totalSkip}** skipped`,
               `coverage **${totalCov}**`,
-              'race detector **on**',
             ].join(' · ');
 
             const parts = [
@@ -195,6 +251,20 @@ jobs:
 
             if (failSections.length > 0) {
               parts.push('', '### Failures', '', ...failSections);
+            }
+            if (testExit !== 0) {
+              const diagnosticText = diagnostics.join('\n').trim().replace(/`/g, "'").slice(-12000)
+                || 'No test diagnostics were produced.';
+              parts.push(
+                '',
+                '<details>',
+                '<summary>Raw test diagnostics</summary>',
+                '',
+                '```',
+                diagnosticText,
+                '```',
+                '</details>',
+              );
             }
 
             // ── Uncovered functions (0%) ────────────────────────────────────
@@ -275,7 +345,7 @@ jobs:
 
       # Fail the workflow after the comment is posted so the PR is blocked.
       - name: Enforce test pass
-        if: steps.tests.outputs.exit_code != '0'
+        if: steps.tests.outputs.exit_code != '0' || steps.coverage.outputs.exit_code != '0'
         run: |
-          echo "Tests failed — see the PR comment for details."
+          echo "Tests or aggregate coverage failed — see the PR comment for details."
           exit 1

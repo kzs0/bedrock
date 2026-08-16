@@ -512,23 +512,40 @@ defer close()
 ## Testing
 
 ```bash
-# Run tests
-go test ./...
-
-# Run tests with race detection
-go test -race ./...
-
-# Run linter (must pass before pushing — matches CI)
-golangci-lint run --timeout=5m ./...
+# CI-equivalent validation
+go build ./...
+make ci
 
 # Run example
 go run example/main.go
 ```
 
-**After making any code changes, always run both tests and the linter before committing:**
-```bash
-go test ./... && golangci-lint run --timeout=5m ./...
-```
+Run the aggregate `make ci` target with Go 1.25 because the pinned vulnerability
+scanner requires it; library code must remain compatible with Go 1.24.
+
+CI builds and runs ordinary tests on Go 1.24 and 1.25. Go 1.24 lanes enforce the
+race detector, 80% aggregate coverage, formatting, vet, lint, and nested `bench`
+module checks; vulnerability scanning uses Go 1.25. Prefer deterministic
+channels, barriers, and test servers over sleeps. Repeat concurrency-sensitive
+tests with `-count=N`, and use caller-controlled contexts for cancellation and
+shutdown tests.
+
+Repository policy lives in [CONTRIBUTING.md](CONTRIBUTING.md), security reports
+follow [SECURITY.md](SECURITY.md), and user-visible changes belong under
+`Unreleased` in [CHANGELOG.md](CHANGELOG.md).
+
+### Compatibility and release discipline
+
+- Go 1.24 is the module baseline. Do not use newer language or standard-library
+  APIs without intentionally raising `go.mod` and documenting the change.
+- Bedrock is pre-1.0. Minimize disruption, but document every intentional API,
+  configuration, validation, lifecycle, or telemetry-semantics change with a
+  migration note.
+- Tests should assert observable contracts rather than implementation details.
+- Releases are maintainer-driven tags. A valid SemVer tag on `main` triggers
+  verification and automated GitHub Release publication; a suffix marks the
+  release as a prerelease. Follow `CONTRIBUTING.md` and never move an existing
+  tag.
 
 **Key test files:**
 - `api_test.go` - Integration tests for public API
@@ -1049,7 +1066,8 @@ go tool pprof -http=:8081 heap.prof
 ## Module Information
 
 - **Module**: `github.com/kzs0/bedrock`
-- **Go Version**: 1.25+
+- **Go Version**: 1.24+
+- **CI Versions**: Go 1.24 and 1.25
 - **Dependencies**: Standard library only (no external dependencies)
 
 ## Summary

@@ -161,6 +161,264 @@ func TestEncode_SortedByName(t *testing.T) {
 	}
 }
 
+func TestEncode_DoesNotReorderCallerFamilies(t *testing.T) {
+	families := []metric.MetricFamily{
+		{Name: "z_metric", Type: metric.TypeGauge, Metrics: []metric.Metric{{Value: 1}}},
+		{Name: "a_metric", Type: metric.TypeGauge, Metrics: []metric.Metric{{Value: 2}}},
+	}
+	var buf bytes.Buffer
+	if err := Encode(&buf, families); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if families[0].Name != "z_metric" || families[1].Name != "a_metric" {
+		t.Fatalf("Encode reordered caller slice: %#v", families)
+	}
+	if strings.Index(buf.String(), "a_metric") > strings.Index(buf.String(), "z_metric") {
+		t.Fatalf("encoded output is not sorted: %q", buf.String())
+	}
+}
+
+func TestEncode_RejectsInvalidProtocolFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		family metric.MetricFamily
+		want   string
+	}{
+		{
+			name: "metric newline",
+			family: metric.MetricFamily{Name: "safe\nevil", Type: metric.TypeGauge,
+				Metrics: []metric.Metric{{Value: 1}}},
+			want: "invalid metric name",
+		},
+		{
+			name: "metric leading digit",
+			family: metric.MetricFamily{Name: "1metric", Type: metric.TypeGauge,
+				Metrics: []metric.Metric{{Value: 1}}},
+			want: "invalid metric name",
+		},
+		{
+			name: "label newline",
+			family: metric.MetricFamily{Name: "safe_metric", Type: metric.TypeGauge,
+				Metrics: []metric.Metric{{Labels: attr.NewSet(attr.String("safe\nevil", "value")), Value: 1}}},
+			want: "invalid label name",
+		},
+		{
+			name: "reserved label prefix",
+			family: metric.MetricFamily{Name: "safe_metric", Type: metric.TypeGauge,
+				Metrics: []metric.Metric{{Labels: attr.NewSet(attr.String("__private", "value")), Value: 1}}},
+			want: "invalid label name",
+		},
+		{
+			name: "histogram le label",
+			family: metric.MetricFamily{Name: "safe_histogram", Type: metric.TypeHistogram,
+				Metrics: []metric.Metric{{Labels: attr.NewSet(attr.String("le", "user"))}}},
+			want: "reserved label",
+		},
+		{
+			name: "invalid type",
+			family: metric.MetricFamily{Name: "safe_metric", Type: metric.MetricType("gauge\nattack"),
+				Metrics: []metric.Metric{{Value: 1}}},
+			want: "invalid type",
+		},
+		{
+			name: "invalid help utf8",
+			family: metric.MetricFamily{Name: "safe_metric", Help: "bad\xff", Type: metric.TypeGauge,
+				Metrics: []metric.Metric{{Value: 1}}},
+			want: "help contains invalid UTF-8",
+		},
+		{
+			name: "invalid label utf8",
+			family: metric.MetricFamily{Name: "safe_metric", Type: metric.TypeGauge,
+				Metrics: []metric.Metric{{Labels: attr.NewSet(attr.String("label", "bad\xff")), Value: 1}}},
+			want: "contains invalid UTF-8",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := Encode(&buf, []metric.MetricFamily{tt.family})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Encode error = %v, want %q", err, tt.want)
+			}
+			if buf.Len() != 0 {
+				t.Fatalf("invalid family produced partial exposition: %q", buf.String())
+			}
+		})
+	}
+}
+
+func TestEncode_RejectsCrossFamilySampleNameCollisionsBeforeWriting(t *testing.T) {
+	tests := []struct {
+		name      string
+		families  []metric.MetricFamily
+		collision string
+	}{
+		{
+			name: "duplicate family name",
+			families: []metric.MetricFamily{
+				{Name: "requests", Type: metric.TypeCounter, Metrics: []metric.Metric{{Value: 1}}},
+				{Name: "requests", Type: metric.TypeGauge, Metrics: []metric.Metric{{Value: 2}}},
+			},
+			collision: "requests",
+		},
+		{
+			name: "histogram bucket collides with explicit family",
+			families: []metric.MetricFamily{
+				{Name: "latency", Type: metric.TypeHistogram, Metrics: []metric.Metric{{Count: 1}}},
+				{Name: "latency_bucket", Type: metric.TypeGauge, Metrics: []metric.Metric{{Value: 2}}},
+			},
+			collision: "latency_bucket",
+		},
+		{
+			name: "histogram sum collides regardless of input order",
+			families: []metric.MetricFamily{
+				{Name: "size_sum", Type: metric.TypeGauge, Metrics: []metric.Metric{{Value: 2}}},
+				{Name: "size", Type: metric.TypeHistogram, Metrics: []metric.Metric{{Count: 1}}},
+			},
+			collision: "size_sum",
+		},
+		{
+			name: "histogram count collides with explicit family",
+			families: []metric.MetricFamily{
+				{Name: "items", Type: metric.TypeHistogram, Metrics: []metric.Metric{{Count: 1}}},
+				{Name: "items_count", Type: metric.TypeCounter, Metrics: []metric.Metric{{Value: 2}}},
+			},
+			collision: "items_count",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			output.WriteString("existing")
+			err := Encode(&output, tt.families)
+			if err == nil || !strings.Contains(err.Error(), tt.collision) || !strings.Contains(err.Error(), "collides") {
+				t.Fatalf("Encode error = %v, want collision for %q", err, tt.collision)
+			}
+			if got := output.String(); got != "existing" {
+				t.Fatalf("invalid families wrote partial output: %q", got)
+			}
+		})
+	}
+}
+
+func TestEncode_AcceptsColonInMetricName(t *testing.T) {
+	var output bytes.Buffer
+	families := []metric.MetricFamily{{
+		Name: "service:requests_total", Type: metric.TypeCounter,
+		Metrics: []metric.Metric{{Labels: attr.NewSet(attr.String("method", "GET")), Value: 1}},
+	}}
+	if err := Encode(&output, families); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if !strings.Contains(output.String(), "service:requests_total") {
+		t.Fatalf("missing colon metric name: %q", output.String())
+	}
+}
+
+func TestEncode_RejectsInvalidHistogramStructureBeforeWriting(t *testing.T) {
+	tests := []struct {
+		name    string
+		metric  metric.Metric
+		wantErr string
+	}{
+		{
+			name:    "NaN bound",
+			metric:  metric.Metric{Buckets: []metric.Bucket{{UpperBound: math.NaN()}}, Count: 1},
+			wantErr: "non-finite bound",
+		},
+		{
+			name:    "positive infinity bound",
+			metric:  metric.Metric{Buckets: []metric.Bucket{{UpperBound: math.Inf(1)}}, Count: 1},
+			wantErr: "non-finite bound",
+		},
+		{
+			name:    "negative infinity bound",
+			metric:  metric.Metric{Buckets: []metric.Bucket{{UpperBound: math.Inf(-1)}}, Count: 1},
+			wantErr: "non-finite bound",
+		},
+		{
+			name:    "duplicate bounds",
+			metric:  metric.Metric{Buckets: []metric.Bucket{{UpperBound: 1}, {UpperBound: 1}}, Count: 1},
+			wantErr: "not strictly increasing",
+		},
+		{
+			name:    "decreasing bounds",
+			metric:  metric.Metric{Buckets: []metric.Bucket{{UpperBound: 2}, {UpperBound: 1}}, Count: 1},
+			wantErr: "not strictly increasing",
+		},
+		{
+			name:    "decreasing cumulative counts",
+			metric:  metric.Metric{Buckets: []metric.Bucket{{UpperBound: 1, Count: 2}, {UpperBound: 2, Count: 1}}, Count: 2},
+			wantErr: "bucket counts decrease",
+		},
+		{
+			name:    "bucket count exceeds total",
+			metric:  metric.Metric{Buckets: []metric.Bucket{{UpperBound: 1, Count: 2}}, Count: 1},
+			wantErr: "exceeds total count",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			families := []metric.MetricFamily{
+				{Name: "a_valid", Type: metric.TypeGauge, Metrics: []metric.Metric{{Value: 1}}},
+				{Name: "z_histogram", Type: metric.TypeHistogram, Metrics: []metric.Metric{tt.metric}},
+			}
+			var output bytes.Buffer
+			output.WriteString("existing")
+			err := Encode(&output, families)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Encode error = %v, want %q", err, tt.wantErr)
+			}
+			if got := output.String(); got != "existing" {
+				t.Fatalf("invalid histogram wrote partial output: %q", got)
+			}
+		})
+	}
+}
+
+func TestEncode_AcceptsValidHistogramStructure(t *testing.T) {
+	family := metric.MetricFamily{
+		Name: "temperature", Type: metric.TypeHistogram,
+		Metrics: []metric.Metric{{
+			Buckets: []metric.Bucket{
+				{UpperBound: -10, Count: 0},
+				{UpperBound: 0, Count: 2},
+				{UpperBound: 10, Count: 2},
+			},
+			Count: 3,
+			Sum:   1,
+		}},
+	}
+	var output bytes.Buffer
+	if err := Encode(&output, []metric.MetricFamily{family}); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if !strings.Contains(output.String(), `temperature_bucket{le="+Inf"} 3`) {
+		t.Fatalf("missing implicit +Inf bucket: %q", output.String())
+	}
+}
+
+func TestEncode_LabelValuesUsePrometheusEscaping(t *testing.T) {
+	family := metric.MetricFamily{
+		Name: "escaped_metric", Type: metric.TypeGauge,
+		Metrics: []metric.Metric{{
+			Labels: attr.NewSet(attr.String("label", "line1\nline2\t\"quote\"\\tail")),
+			Value:  1,
+		}},
+	}
+	var buf bytes.Buffer
+	if err := Encode(&buf, []metric.MetricFamily{family}); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	want := "escaped_metric{label=\"line1\\nline2\t\\\"quote\\\"\\\\tail\"} 1\n"
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("encoded label = %q, want sample %q", buf.String(), want)
+	}
+}
+
 func TestEncode_MultipleLabels(t *testing.T) {
 	families := []metric.MetricFamily{
 		{

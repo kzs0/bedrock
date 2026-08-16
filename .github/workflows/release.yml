@@ -1,0 +1,118 @@
+name: Tagged Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify Release Tag
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate semantic version tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          ./scripts/validate-release-tag.sh "$RELEASE_TAG"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Release tags must point to a commit on main." >&2
+            exit 1
+          }
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24.13"
+          cache: true
+
+      - name: Verify release source
+        run: |
+          go mod download
+          go mod verify
+          ./scripts/check-gofmt.sh
+          go vet ./...
+          go test -race -count=1 ./...
+          ./scripts/coverage.sh 80.0 coverage.out
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
+      - name: Verify nested bench module
+        working-directory: bench
+        run: |
+          ../scripts/check-bench-tidy.sh
+          go mod download
+          go mod verify
+          go test -count=1 ./...
+          go vet ./...
+
+      - name: Set up Go for govulncheck
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # govulncheck v1.7.0 requires Go 1.25.
+          go-version: "1.25.12"
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+
+      - name: Scan release modules
+        run: |
+          govulncheck ./...
+          (cd bench && govulncheck ./...)
+
+  release:
+    name: Create GitHub Release
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create release from verified tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            release_json=$(gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease)
+            actual_tag=$(jq -r '.tagName' <<< "$release_json")
+            is_draft=$(jq -r '.isDraft' <<< "$release_json")
+            is_prerelease=$(jq -r '.isPrerelease' <<< "$release_json")
+            expected_prerelease=false
+            if [[ "$RELEASE_TAG" == *-* ]]; then
+              expected_prerelease=true
+            fi
+            if [[ "$actual_tag" != "$RELEASE_TAG" || "$is_draft" != "false" || "$is_prerelease" != "$expected_prerelease" ]]; then
+              echo "Existing release state does not match verified tag $RELEASE_TAG." >&2
+              echo "$release_json" >&2
+              exit 1
+            fi
+            echo "Verified existing published release $RELEASE_TAG."
+            exit 0
+          fi
+
+          args=(--verify-tag --generate-notes)
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" "${args[@]}"

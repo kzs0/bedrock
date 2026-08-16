@@ -41,6 +41,9 @@ const (
 	MaxTracestateEntries  = 32
 	MaxTracestateKeyLen   = 256
 	MaxTracestateValueLen = 256
+	// MaxTracestateLen is this implementation's acceptance and propagation
+	// cap. It is not a protocol-wide wire maximum.
+	MaxTracestateLen = 512
 )
 
 var (
@@ -87,7 +90,7 @@ func ParseTraceparent(value string) (internal.TraceID, internal.SpanID, byte, er
 	if len(version) != versionLen {
 		return zeroTraceID, zeroSpanID, 0, ErrInvalidVersion
 	}
-	if !isHex(version) {
+	if !isLowercaseHex(version) {
 		return zeroTraceID, zeroSpanID, 0, ErrInvalidVersion
 	}
 
@@ -99,6 +102,9 @@ func ParseTraceparent(value string) (internal.TraceID, internal.SpanID, byte, er
 	} else if version == "ff" {
 		// Version ff is forbidden
 		return zeroTraceID, zeroSpanID, 0, ErrUnsupportedVersion
+	}
+	if version == "00" && len(fields) != fieldCount {
+		return zeroTraceID, zeroSpanID, 0, ErrInvalidTraceparent
 	}
 
 	// Parse trace-id (must be 32 lowercase hex characters)
@@ -137,7 +143,7 @@ func ParseTraceparent(value string) (internal.TraceID, internal.SpanID, byte, er
 	if len(flagsHex) != flagsLen {
 		return zeroTraceID, zeroSpanID, 0, ErrInvalidFlags
 	}
-	if !isHex(flagsHex) {
+	if !isLowercaseHex(flagsHex) {
 		return zeroTraceID, zeroSpanID, 0, ErrInvalidFlags
 	}
 
@@ -171,10 +177,14 @@ func FormatTraceparent(traceID internal.TraceID, spanID internal.SpanID, sampled
 // Returns a list of key-value pairs.
 //
 // Format: key1=value1,key2=value2,...
-// Maximum 32 entries, keys must be unique (last occurrence wins).
+// Maximum 32 list members; keys must be unique. This implementation accepts up
+// to MaxTracestateLen bytes, the minimum capacity required for interoperability.
 func ParseTracestate(value string) ([]Entry, error) {
 	if value == "" {
 		return nil, nil
+	}
+	if len(value) > MaxTracestateLen {
+		return nil, fmt.Errorf("%w: header exceeds %d bytes", ErrInvalidTracestate, MaxTracestateLen)
 	}
 
 	// Split by comma
@@ -186,9 +196,8 @@ func ParseTracestate(value string) ([]Entry, error) {
 	entries := make([]Entry, 0, len(parts))
 	seen := make(map[string]bool)
 
-	// Process in reverse to implement "last wins" for duplicates
-	for i := len(parts) - 1; i >= 0; i-- {
-		part := strings.TrimSpace(parts[i])
+	for _, rawPart := range parts {
+		part := trimOWS(rawPart)
 		if part == "" {
 			continue
 		}
@@ -199,8 +208,10 @@ func ParseTracestate(value string) ([]Entry, error) {
 			return nil, fmt.Errorf("%w: invalid entry format", ErrInvalidTracestate)
 		}
 
-		key := strings.TrimSpace(kv[0])
-		value := strings.TrimSpace(kv[1])
+		// OWS is permitted around list members and comma separators, not
+		// around '='. In particular, a leading SP is valid value data.
+		key := kv[0]
+		value := kv[1]
 
 		// Validate key
 		if !IsValidTracestateKey(key) {
@@ -212,21 +223,22 @@ func ParseTracestate(value string) ([]Entry, error) {
 			return nil, fmt.Errorf("%w: invalid value format", ErrInvalidTracestate)
 		}
 
-		// Check for duplicates (skip if already seen)
+		// Duplicate keys make the entire tracestate invalid.
 		if seen[key] {
-			continue
+			return nil, fmt.Errorf("%w: duplicate key %q", ErrInvalidTracestate, key)
 		}
 		seen[key] = true
 
-		// Prepend to maintain order (since we're processing in reverse)
-		entries = append([]Entry{{Key: key, Value: value}}, entries...)
+		entries = append(entries, Entry{Key: key, Value: value})
 	}
 
 	return entries, nil
 }
 
 // FormatTracestate formats a W3C tracestate header value.
-// Joins entries with commas, up to 512 characters minimum (per spec).
+// Joins at most 32 valid, unique entries without exceeding this
+// implementation's MaxTracestateLen propagation cap. Invalid entries and later
+// duplicates are omitted because this API has no error return.
 func FormatTracestate(entries []Entry) string {
 	if len(entries) == 0 {
 		return ""
@@ -234,23 +246,42 @@ func FormatTracestate(entries []Entry) string {
 
 	parts := make([]string, 0, len(entries))
 	totalLen := 0
+	seen := make(map[string]struct{}, min(len(entries), MaxTracestateEntries))
 
 	for _, entry := range entries {
-		part := entry.Key + "=" + entry.Value
-		// Ensure we propagate at least 512 characters
-		if totalLen+len(part) > 512 && totalLen >= 512 {
+		if len(parts) == MaxTracestateEntries {
 			break
 		}
+		if !IsValidTracestateKey(entry.Key) || !IsValidTracestateValue(entry.Value) {
+			continue
+		}
+		if _, duplicate := seen[entry.Key]; duplicate {
+			continue
+		}
+		// The first valid occurrence owns the key even when it cannot be
+		// propagated within the implementation limit. A later duplicate must
+		// not replace it with different state.
+		seen[entry.Key] = struct{}{}
+		part := entry.Key + "=" + entry.Value
+		nextLen := len(part)
+		if len(parts) > 0 {
+			nextLen++ // comma separator
+		}
+		if nextLen > MaxTracestateLen-totalLen {
+			continue
+		}
 		parts = append(parts, part)
-		totalLen += len(part) + 1 // +1 for comma
+		totalLen += nextLen
 	}
 
 	return strings.Join(parts, ",")
 }
 
 // IsValidTracestateKey validates a tracestate key per W3C spec.
-// Simple key: lowercase alphanumeric, underscore, hyphen, asterisk, slash
-// Multi-tenant key: {tenant}@{system} where both parts follow simple key rules
+// A simple key starts with lowercase alpha and is at most 256 bytes. A
+// multi-tenant key is {tenant}@{system}: tenant starts with lowercase alpha or
+// a digit and is at most 241 bytes; system starts with lowercase alpha and is at
+// most 14 bytes. Remaining bytes may be lowercase alphanumeric or _-*/.
 func IsValidTracestateKey(key string) bool {
 	if key == "" || len(key) > MaxTracestateKeyLen {
 		return false
@@ -258,20 +289,24 @@ func IsValidTracestateKey(key string) bool {
 
 	// Check for multi-tenant format
 	if strings.Contains(key, "@") {
-		parts := strings.Split(key, "@")
-		if len(parts) != 2 {
+		if strings.Count(key, "@") != 1 {
 			return false
 		}
-		return isValidSimpleKey(parts[0]) && isValidSimpleKey(parts[1])
+		tenant, system, _ := strings.Cut(key, "@")
+		return isValidTracestateKeyPart(tenant, 241, true) &&
+			isValidTracestateKeyPart(system, 14, false)
 	}
 
-	return isValidSimpleKey(key)
+	return isValidTracestateKeyPart(key, MaxTracestateKeyLen, false)
 }
 
 // IsValidTracestateValue validates a tracestate value per W3C spec.
 // Must be printable ASCII (0x20-0x7E) excluding comma and equals.
 func IsValidTracestateValue(value string) bool {
 	if value == "" || len(value) > MaxTracestateValueLen {
+		return false
+	}
+	if value[len(value)-1] == ' ' {
 		return false
 	}
 
@@ -283,14 +318,8 @@ func IsValidTracestateValue(value string) bool {
 	return true
 }
 
-// isHex checks if a string contains only hexadecimal characters (case-insensitive).
-func isHex(s string) bool {
-	for _, c := range s {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
-			return false
-		}
-	}
-	return true
+func trimOWS(value string) string {
+	return strings.Trim(value, " \t")
 }
 
 // isLowercaseHex checks if a string contains only lowercase hexadecimal characters.
@@ -303,13 +332,15 @@ func isLowercaseHex(s string) bool {
 	return true
 }
 
-// isValidSimpleKey validates a simple tracestate key.
-func isValidSimpleKey(key string) bool {
-	if key == "" {
+func isValidTracestateKeyPart(key string, maxLen int, digitFirst bool) bool {
+	if key == "" || len(key) > maxLen {
+		return false
+	}
+	if first := key[0]; (first < 'a' || first > 'z') && (!digitFirst || first < '0' || first > '9') {
 		return false
 	}
 
-	for _, c := range key {
+	for _, c := range key[1:] {
 		if (c < 'a' || c > 'z') && (c < '0' || c > '9') &&
 			c != '_' && c != '-' && c != '*' && c != '/' {
 			return false
