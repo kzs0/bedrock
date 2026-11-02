@@ -32,10 +32,10 @@ jobs:
         run: |
           set +e
           : > test-diagnostics.txt
-          package_output=$(go list ./... 2>&1)
+          package_output=$(go list ./... 2>test-diagnostics.txt)
           list_status=$?
           if (( list_status != 0 )); then
-            printf '%s\n' "$package_output" > test-diagnostics.txt
+            printf '%s\n' "$package_output" >> test-diagnostics.txt
             cat test-diagnostics.txt >&2
             : > test-results.json
             echo "exit_code=$list_status" >> "$GITHUB_OUTPUT"
