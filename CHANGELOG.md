@@ -22,6 +22,9 @@ pre-1.0, minor releases may include intentional API or behavior changes.
 
 ### Changed
 
+- Updated golangci-lint to v2.15.0 for Go 1.27 compiler support.
+- CI tests Go 1.27.3 alongside the Go 1.24 baseline and Go 1.26; release and profile compatibility checks use Go 1.27.3.
+
 - Core imports no longer register global pprof routes. HTTP profiling requires explicit optional handler injection.
 - Safe telemetry defaults omit raw URLs/paths, user agents, infrastructure identifiers, error details and full source paths; explicit policy options restore reviewed fields.
 - Zero sampling rate disables recording. Metric registration rejects name/schema conflicts and bounds families and series.

@@ -230,7 +230,10 @@ func TestServe_And_Shutdown(t *testing.T) {
 
 	// Server goroutine should have exited
 	select {
-	case <-done:
+	case err := <-done:
+		if err != http.ErrServerClosed {
+			t.Errorf("Serve: got %v, want %v", err, http.ErrServerClosed)
+		}
 	case <-time.After(2 * time.Second):
 		t.Error("server did not stop after Shutdown")
 	}

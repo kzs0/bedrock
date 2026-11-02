@@ -1,5 +1,5 @@
 GO ?= go
-GOLANGCI_LINT ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+GOLANGCI_LINT ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 GOVULNCHECK ?= go run golang.org/x/vuln/cmd/govulncheck@v1.7.0
 COVERAGE_MIN ?= 80.0
 
