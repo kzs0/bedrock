@@ -15,7 +15,7 @@ keep unrelated changes in separate pull requests.
 
 ## Make a change
 
-- Preserve the context-based, dependency-light design and controlled metric
+- Preserve the context-based, third-party-free core design and controlled metric
   cardinality.
 - Add focused tests for success, failure, boundary, cancellation, and
   concurrency behavior where relevant.
@@ -23,7 +23,8 @@ keep unrelated changes in separate pull requests.
   tests with the race detector.
 - Update public documentation and the `Unreleased` section of
   [CHANGELOG.md](CHANGELOG.md) when behavior, configuration, or API changes.
-- Do not add or update dependencies unless the change requires it and the pull
+- The core module must have zero third-party dependencies. Keep external tooling in isolated modules.
+- Do not add or update isolated-module dependencies unless the change requires it and the pull
   request explains the tradeoff.
 
 Format and validate the repository before submitting:

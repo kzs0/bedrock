@@ -28,7 +28,7 @@ pre-1.0, minor releases may include intentional API or behavior changes.
 - Core imports no longer register global pprof routes. HTTP profiling requires explicit optional handler injection.
 - Safe telemetry defaults omit raw URLs/paths, user agents, infrastructure identifiers, error details and full source paths; explicit policy options restore reviewed fields.
 - Zero sampling rate disables recording. Metric registration rejects name/schema conflicts and bounds families and series.
-- Profile encoding uses the maintained Google pprof parser; the small parser dependency preserves the Go 1.24 baseline.
+- Profile encoding uses a bounded internal pprof protobuf parser. The core library guarantees zero third-party dependencies and preserves the Go 1.24 baseline.
 
 - Operation completion is idempotent: the first `Done` or `End` call wins.
 - Metric registries and Bedrock instances defensively copy histogram bucket

@@ -4,6 +4,8 @@ An opinionated observability library for Go that provides tracing, metrics, prof
 
 ## Instrumentation safety and OTLP profiles
 
+The core library has zero third-party dependencies. External compatibility and benchmark tooling lives in isolated Go modules.
+
 Profiles are exported to a configured OTLP HTTP collector. Importing the core package registers no pprof routes. A cloud account and an HTTP observability server are unnecessary:
 
 ```go

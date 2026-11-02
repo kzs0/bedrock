@@ -12,9 +12,9 @@ import (
 	"sort"
 	"time"
 
-	pprof "github.com/google/pprof/profile"
 	"github.com/kzs0/bedrock/attr"
 	"github.com/kzs0/bedrock/internal"
+	"github.com/kzs0/bedrock/internal/pprof"
 )
 
 const maxProfileBytes = 32 << 20
