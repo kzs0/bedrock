@@ -94,6 +94,32 @@ jobs:
           ./scripts/enforce-coverage.sh coverage.out 80.0
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
+      - name: Validate E2E report rendering
+        run: node --test scripts/e2e-report.test.cjs
+
+      - name: Run functional E2E report
+        id: e2e
+        run: |
+          set +e
+          make e2e-coverage E2E_TEST_FLAGS=-json > e2e-diagnostics.txt 2>&1
+          status=$?
+          cat e2e-diagnostics.txt
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          echo "go_version=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+          go tool cover -func=coverage-e2e.out > coverage-e2e.txt 2>/dev/null || touch coverage-e2e.txt
+
+      - name: Upload E2E report artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: e2e-report-coverage
+          retention-days: 14
+          path: |
+            e2e-diagnostics.txt
+            coverage-e2e.out
+            coverage-e2e.txt
+            coverage-e2e-inventory.md
+
       # Parse test-results.json (NDJSON from go test -json), build a markdown
       # summary, and post it as a PR comment — updating any previous one.
       - name: Post test report comment
@@ -104,6 +130,8 @@ jobs:
         env:
           TEST_EXIT_CODE: ${{ steps.tests.outputs.exit_code }}
           COVERAGE_EXIT_CODE: ${{ steps.coverage.outputs.exit_code }}
+          E2E_EXIT_CODE: ${{ steps.e2e.outputs.exit_code }}
+          E2E_GO_VERSION: ${{ steps.e2e.outputs.go_version }}
         with:
           script: |
             const fs = require('fs');
@@ -173,7 +201,16 @@ jobs:
             }
             const testExit = Number.parseInt(process.env.TEST_EXIT_CODE ?? '1', 10);
             const coverageExit = Number.parseInt(process.env.COVERAGE_EXIT_CODE ?? '1', 10);
-            const anyFailed = testExit !== 0 || coverageExit !== 0;
+            const { renderE2EReport } = require('./scripts/e2e-report.cjs');
+            const readReport = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+            const e2eReport = renderE2EReport({
+              log: readReport('e2e-diagnostics.txt'),
+              coverage: readReport('coverage-e2e.txt'),
+              exitCode: process.env.E2E_EXIT_CODE,
+              goVersion: process.env.E2E_GO_VERSION,
+              runUrl: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
+            const anyFailed = testExit !== 0 || coverageExit !== 0 || !e2eReport.passed;
 
             // ── Parse function-level coverage (go tool cover -func output) ──
             const mod = 'github.com/kzs0/bedrock';
@@ -255,7 +292,7 @@ jobs:
               `**${totalPass}** passed`,
               `**${totalFail}** failed`,
               `**${totalSkip}** skipped`,
-              `coverage **${totalCov}**`,
+              `unit coverage **${totalCov}**`,
             ].join(' · ');
 
             const parts = [
@@ -264,7 +301,9 @@ jobs:
               '',
               summary,
               '',
-              '### Package Results',
+              e2eReport.markdown,
+              '',
+              '### Unit package results',
               '',
               table,
             ];
@@ -365,7 +404,7 @@ jobs:
 
       # Fail the workflow after the comment is posted so the PR is blocked.
       - name: Enforce test pass
-        if: steps.tests.outputs.exit_code != '0' || steps.coverage.outputs.exit_code != '0'
+        if: steps.tests.outputs.exit_code != '0' || steps.coverage.outputs.exit_code != '0' || steps.e2e.outputs.exit_code != '0'
         run: |
-          echo "Tests or aggregate coverage failed — see the PR comment for details."
+          echo "Tests, coverage, or E2E failed — see the PR comment for details."
           exit 1
