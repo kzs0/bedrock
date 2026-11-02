@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/kzs0/bedrock/attr"
 	"github.com/kzs0/bedrock/trace"
@@ -54,15 +55,18 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttrs(
 			attr.String("http.method", req.Method),
-			attr.String("http.url", req.URL.String()),
+			attr.String("http.url", safeURL(req.URL)),
 			attr.String("http.host", req.URL.Host),
 			attr.String("http.scheme", req.URL.Scheme),
-			attr.String("http.target", req.URL.Path),
 		),
 	)
 	defer span.End()
 
 	// Inject W3C Trace Context headers
+	req = req.Clone(spanCtx)
+	if req.Header == nil {
+		req.Header = make(http.Header)
+	}
 	prop := &httpProp.Propagator{}
 	_ = prop.Inject(spanCtx, req.Header)
 
@@ -99,4 +103,16 @@ func (t *Transport) base() http.RoundTripper {
 		return t.Base
 	}
 	return http.DefaultTransport
+}
+
+func safeURL(value *url.URL) string {
+	copy := *value
+	copy.User = nil
+	copy.Path = ""
+	copy.RawPath = ""
+	copy.RawQuery = ""
+	copy.ForceQuery = false
+	copy.Fragment = ""
+	copy.RawFragment = ""
+	return copy.String()
 }

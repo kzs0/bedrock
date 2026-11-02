@@ -3,9 +3,9 @@ GOLANGCI_LINT ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v
 GOVULNCHECK ?= go run golang.org/x/vuln/cmd/govulncheck@v1.7.0
 COVERAGE_MIN ?= 80.0
 
-.PHONY: ci format-check vet lint test race coverage bench-tidy bench-test vuln
+.PHONY: ci format-check vet lint test race coverage bench-tidy bench-test compat-test compat-tidy vuln
 
-ci: format-check vet lint test race coverage bench-test vuln
+ci: format-check vet lint test race coverage bench-test compat-test vuln
 
 format-check:
 	./scripts/check-gofmt.sh
@@ -35,3 +35,10 @@ vuln:
 	GO="$(GO)" ./scripts/require-go-version.sh 1.25
 	GOTOOLCHAIN=local $(GOVULNCHECK) ./...
 	cd bench && GOTOOLCHAIN=local $(GOVULNCHECK) ./...
+	cd compat/otlp && GOTOOLCHAIN=local $(GOVULNCHECK) ./...
+
+compat-tidy:
+	cd compat/otlp && $(GO) mod tidy -diff
+
+compat-test: compat-tidy
+	cd compat/otlp && $(GO) test -count=1 ./... && $(GO) vet ./...

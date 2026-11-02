@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         # Preserve the Go 1.24 baseline and test the current Go toolchain.
-        go-version: ["1.24.13", "1.26.6"]
+        go-version: ["1.24.13", "1.26.10"]
 
     steps:
       - name: Check out code
@@ -130,7 +130,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [".", "bench"]
+        module: [".", "bench", "compat/otlp"]
 
     steps:
       - name: Check out code
@@ -143,7 +143,7 @@ jobs:
         with:
           # Scan with the current patched toolchain; compatibility with the
           # library's Go 1.24 baseline is tested in separate jobs above.
-          go-version: "1.26.6"
+          go-version: "1.26.10"
           cache: true
 
       - name: Install govulncheck
@@ -152,3 +152,20 @@ jobs:
       - name: Run govulncheck
         working-directory: ${{ matrix.module }}
         run: govulncheck ./...
+
+  otlp-compatibility:
+    name: OTLP Profiles Compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: "1.26.10"
+          cache-dependency-path: compat/otlp/go.sum
+      - name: Verify profile compatibility
+        working-directory: compat/otlp
+        run: |
+          go mod tidy -diff
+          go mod verify
+          go test -race -count=1 ./...
+          go vet ./...

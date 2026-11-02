@@ -3,148 +3,136 @@ package otlp
 import (
 	"context"
 	"errors"
-	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kzs0/bedrock/trace"
 )
 
-// BatchProcessorConfig configures the batch processor.
+// BatchProcessorConfig configures bounded span batching.
 type BatchProcessorConfig struct {
-	// MaxQueueSize is the maximum number of spans to queue.
 	MaxQueueSize int
-	// BatchSize is the maximum number of spans per export.
-	BatchSize int
-	// BatchTimeout is the maximum time to wait before exporting.
+	BatchSize    int
 	BatchTimeout time.Duration
 }
 
-// DefaultBatchConfig returns default batch processor configuration.
+// DefaultBatchConfig returns production batching defaults.
 func DefaultBatchConfig() BatchProcessorConfig {
-	return BatchProcessorConfig{
-		MaxQueueSize: 2048,
-		BatchSize:    512,
-		BatchTimeout: 5 * time.Second,
-	}
+	return BatchProcessorConfig{2048, 512, 5 * time.Second}
 }
 
-// BatchProcessor batches spans before sending to an exporter.
+// BatchStats reports cumulative export losses.
+type BatchStats struct {
+	DroppedSpans  uint64
+	FailedExports uint64
+}
+
+// BatchProcessor exports through one bounded worker.
 type BatchProcessor struct {
-	cfg      BatchProcessorConfig
-	exporter trace.Exporter
-
-	mu       sync.Mutex
-	queue    []*trace.Span
-	timer    *time.Timer
-	stopped  bool
-	exports  sync.WaitGroup
-	shutdown sync.Once
-	done     chan struct{}
-	err      error
-
+	cfg          BatchProcessorConfig
+	exporter     trace.Exporter
+	mu           sync.Mutex
+	queue        []*trace.Span
+	inFlight     int
+	stopped      bool
+	started      sync.Once
+	shutdown     sync.Once
+	wake         chan struct{}
+	done         chan struct{}
 	exportCtx    context.Context
 	cancelExport context.CancelFunc
-	errMu        sync.Mutex
-	exportErrors map[uint64]error
-	nextExportID uint64
+	err          error
+	errorCount   int
+	dropped      atomic.Uint64
+	failed       atomic.Uint64
 }
 
-// NewBatchProcessor creates a new batch processor. The caller retains ownership
-// of exporter and must shut it down after the processor has drained.
+// NewBatchProcessor retains caller ownership of exporter.
 func NewBatchProcessor(exporter trace.Exporter, cfg BatchProcessorConfig) *BatchProcessor {
+	defaults := DefaultBatchConfig()
 	if cfg.MaxQueueSize <= 0 {
-		cfg.MaxQueueSize = 2048
+		cfg.MaxQueueSize = defaults.MaxQueueSize
 	}
 	if cfg.BatchSize <= 0 {
-		cfg.BatchSize = 512
+		cfg.BatchSize = defaults.BatchSize
 	}
 	if cfg.BatchTimeout <= 0 {
-		cfg.BatchTimeout = 5 * time.Second
+		cfg.BatchTimeout = defaults.BatchTimeout
 	}
-
-	exportCtx, cancelExport := context.WithCancel(context.Background())
-	bp := &BatchProcessor{
-		cfg:          cfg,
-		exporter:     exporter,
-		queue:        make([]*trace.Span, 0, cfg.BatchSize),
-		exportCtx:    exportCtx,
-		cancelExport: cancelExport,
-		exportErrors: make(map[uint64]error),
-	}
-
-	return bp
+	ctx, cancel := context.WithCancel(context.Background())
+	return &BatchProcessor{cfg: cfg, exporter: exporter, wake: make(chan struct{}, 1), done: make(chan struct{}), exportCtx: ctx, cancelExport: cancel}
 }
 
-// EnqueueSpan adds a span to the queue for batched export.
+// EnqueueSpan drops newest spans beyond budget.
 func (bp *BatchProcessor) EnqueueSpan(span *trace.Span) {
 	bp.mu.Lock()
-	defer bp.mu.Unlock()
-
-	if bp.stopped {
-		return
-	}
-
-	// Drop oldest spans if queue is full
-	if len(bp.queue) >= bp.cfg.MaxQueueSize {
-		bp.queue = bp.queue[1:]
-	}
-
-	bp.queue = append(bp.queue, span)
-
-	// Start timer if this is the first span
-	if len(bp.queue) == 1 {
-		bp.timer = time.AfterFunc(bp.cfg.BatchTimeout, bp.flush)
-	}
-
-	// Export if batch is full
-	if len(bp.queue) >= bp.cfg.BatchSize {
-		bp.exportLocked()
-	}
-}
-
-// flush exports the current batch.
-func (bp *BatchProcessor) flush() {
-	bp.mu.Lock()
-	if bp.stopped {
+	if bp.stopped || len(bp.queue)+bp.inFlight >= bp.cfg.MaxQueueSize {
+		bp.dropped.Add(1)
 		bp.mu.Unlock()
 		return
 	}
-	bp.exportLocked()
+	bp.queue = append(bp.queue, span)
 	bp.mu.Unlock()
+	bp.start()
+	bp.signal()
 }
-
-// exportLocked exports spans while holding the lock.
-func (bp *BatchProcessor) exportLocked() {
-	if len(bp.queue) == 0 {
-		return
+func (bp *BatchProcessor) start() { bp.started.Do(func() { go bp.run() }) }
+func (bp *BatchProcessor) signal() {
+	select {
+	case bp.wake <- struct{}{}:
+	default:
 	}
-
-	if bp.timer != nil {
-		bp.timer.Stop()
-		bp.timer = nil
-	}
-
-	spans := bp.queue
-	bp.queue = make([]*trace.Span, 0, bp.cfg.BatchSize)
-
-	// Add while holding bp.mu. Shutdown takes the same lock before waiting, so
-	// Wait can never race with a later Add.
-	exportID := bp.nextExportID
-	bp.nextExportID++
-	bp.exports.Add(1)
-	go func() {
-		defer bp.exports.Done()
-		if err := bp.exporter.ExportSpans(bp.exportCtx, spans); err != nil {
-			bp.errMu.Lock()
-			bp.exportErrors[exportID] = err
-			bp.errMu.Unlock()
+}
+func (bp *BatchProcessor) run() {
+	defer close(bp.done)
+	defer bp.cancelExport()
+	timer := time.NewTicker(bp.cfg.BatchTimeout)
+	defer timer.Stop()
+	for {
+		expired := false
+		select {
+		case <-bp.wake:
+		case <-timer.C:
+			expired = true
 		}
-	}()
+		for {
+			bp.mu.Lock()
+			if len(bp.queue) == 0 {
+				stopped := bp.stopped
+				bp.mu.Unlock()
+				if stopped {
+					return
+				}
+				break
+			}
+			if !expired && !bp.stopped && len(bp.queue) < bp.cfg.BatchSize {
+				bp.mu.Unlock()
+				break
+			}
+			n := min(len(bp.queue), bp.cfg.BatchSize)
+			spans := append([]*trace.Span(nil), bp.queue[:n]...)
+			copy(bp.queue, bp.queue[n:])
+			clear(bp.queue[len(bp.queue)-n:])
+			bp.queue = bp.queue[:len(bp.queue)-n]
+			bp.inFlight = n
+			bp.mu.Unlock()
+			err := bp.exporter.ExportSpans(bp.exportCtx, spans)
+			bp.mu.Lock()
+			bp.inFlight = 0
+			if err != nil {
+				bp.failed.Add(1)
+				if bp.errorCount < 16 {
+					bp.err = errors.Join(bp.err, err)
+					bp.errorCount++
+				}
+			}
+			bp.mu.Unlock()
+		}
+	}
 }
 
-// ExportSpans implements the trace.Exporter interface by enqueuing spans for
-// batched export. This avoids spawning a goroutine per span.
+// ExportSpans enqueues without blocking on network.
 func (bp *BatchProcessor) ExportSpans(_ context.Context, spans []*trace.Span) error {
 	for _, s := range spans {
 		bp.EnqueueSpan(s)
@@ -152,54 +140,27 @@ func (bp *BatchProcessor) ExportSpans(_ context.Context, spans []*trace.Span) er
 	return nil
 }
 
-// Shutdown stops the processor and exports remaining spans.
-func (bp *BatchProcessor) Shutdown(ctx context.Context) error {
-	bp.shutdown.Do(func() {
-		bp.done = make(chan struct{})
-		stopContextCancellation := context.AfterFunc(ctx, bp.cancelExport)
+// Stats returns cumulative drops and failures.
+func (bp *BatchProcessor) Stats() BatchStats { return BatchStats{bp.dropped.Load(), bp.failed.Load()} }
 
+// Shutdown drains accepted spans without closing exporter.
+func (bp *BatchProcessor) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	bp.shutdown.Do(func() {
+		stop := context.AfterFunc(ctx, bp.cancelExport)
 		bp.mu.Lock()
 		bp.stopped = true
-		if bp.timer != nil {
-			bp.timer.Stop()
-			bp.timer = nil
-		}
-		// Track the final queued batch exactly like timer- and size-triggered
-		// exports so one wait covers every export started by this processor.
-		bp.exportLocked()
-		exportCount := bp.nextExportID
 		bp.mu.Unlock()
-
-		go func() {
-			bp.exports.Wait()
-			stopContextCancellation()
-			bp.cancelExport()
-			bp.err = bp.joinExportErrors(exportCount)
-			close(bp.done)
-		}()
+		bp.start()
+		bp.signal()
+		go func() { <-bp.done; stop() }()
 	})
-
 	select {
 	case <-bp.done:
 		return bp.err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-func (bp *BatchProcessor) joinExportErrors(exportCount uint64) error {
-	bp.errMu.Lock()
-	defer bp.errMu.Unlock()
-	ids := make([]uint64, 0, len(bp.exportErrors))
-	for id := range bp.exportErrors {
-		if id < exportCount {
-			ids = append(ids, id)
-		}
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	errs := make([]error, 0, len(bp.exportErrors))
-	for _, id := range ids {
-		errs = append(errs, bp.exportErrors[id])
-	}
-	return errors.Join(errs...)
 }

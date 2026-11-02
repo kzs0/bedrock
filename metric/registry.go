@@ -1,8 +1,11 @@
 package metric
 
 import (
+	"fmt"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/kzs0/bedrock/attr"
 )
@@ -22,6 +25,9 @@ type Registry struct {
 	gauges         map[string]*Gauge
 	histograms     map[string]*Histogram
 	collectors     []Collector
+	registrations  map[string]string
+	budget         *seriesBudget
+	maxFamilies    int
 }
 
 // NewRegistry creates a new metric registry with an optional prefix.
@@ -41,6 +47,9 @@ func NewRegistryWithBuckets(prefix string, defaultBuckets []float64) *Registry {
 
 	return &Registry{
 		prefix:         prefix,
+		registrations:  make(map[string]string),
+		budget:         newSeriesBudget(1000),
+		maxFamilies:    1000,
 		defaultBuckets: append([]float64(nil), defaultBuckets...),
 		counters:       make(map[string]*Counter),
 		gauges:         make(map[string]*Gauge),
@@ -58,7 +67,7 @@ func (r *Registry) Counter(name, help string, labelNames ...string) *Counter {
 		name = r.prefix + "_" + name
 	}
 
-	// Sanitize metric name for Prometheus compatibility
+	r.register(name, "Counter", labelNames)
 	name = sanitizeName(name)
 
 	if c, ok := r.counters[name]; ok {
@@ -73,6 +82,7 @@ func (r *Registry) Counter(name, help string, labelNames ...string) *Counter {
 
 	c := &Counter{
 		name:       name,
+		budget:     r.budget,
 		help:       help,
 		labelNames: sanitizedLabels,
 		values:     make(map[string]*counterValue),
@@ -91,7 +101,7 @@ func (r *Registry) Gauge(name, help string, labelNames ...string) *Gauge {
 		name = r.prefix + "_" + name
 	}
 
-	// Sanitize metric name for Prometheus compatibility
+	r.register(name, "Gauge", labelNames)
 	name = sanitizeName(name)
 
 	if g, ok := r.gauges[name]; ok {
@@ -106,6 +116,7 @@ func (r *Registry) Gauge(name, help string, labelNames ...string) *Gauge {
 
 	g := &Gauge{
 		name:       name,
+		budget:     r.budget,
 		help:       help,
 		labelNames: sanitizedLabels,
 		values:     make(map[string]*gaugeValue),
@@ -124,7 +135,7 @@ func (r *Registry) Histogram(name, help string, buckets []float64, labelNames ..
 		name = r.prefix + "_" + name
 	}
 
-	// Sanitize metric name for Prometheus compatibility
+	r.register(name, "Histogram", labelNames)
 	name = sanitizeName(name)
 
 	if h, ok := r.histograms[name]; ok {
@@ -144,6 +155,7 @@ func (r *Registry) Histogram(name, help string, buckets []float64, labelNames ..
 
 	h := &Histogram{
 		name:       name,
+		budget:     r.budget,
 		help:       help,
 		buckets:    buckets,
 		labelNames: sanitizedLabels,
@@ -240,4 +252,55 @@ func sanitizeName(name string) string {
 		}
 		return '_'
 	}, name)
+}
+
+type seriesBudget struct {
+	filter  func(attr.Attr) (attr.Attr, bool)
+	limit   atomic.Int64
+	dropped atomic.Uint64
+}
+
+func newSeriesBudget(limit int) *seriesBudget {
+	b := &seriesBudget{}
+	b.limit.Store(int64(limit))
+	return b
+}
+
+// SetLimits bounds families and per-family series.
+func (r *Registry) SetLimits(families, series int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if families <= 0 || series <= 0 {
+		panic("metric: limits must be positive")
+	}
+	r.maxFamilies = families
+	r.budget.limit.Store(int64(series))
+}
+
+// DroppedSeries reports rejected series registrations.
+func (r *Registry) DroppedSeries() uint64 { return r.budget.dropped.Load() }
+
+func (r *Registry) register(name, kind string, labels []string) {
+	canonical := append([]string(nil), labels...)
+	sort.Strings(canonical)
+	signature := kind + "\x00" + name + "\x00" + strings.Join(canonical, "\x00")
+	sanitized := sanitizeName(name)
+	if existing, ok := r.registrations[sanitized]; ok {
+		if existing != signature {
+			panic(fmt.Sprintf("metric: conflicting registration %q", name))
+		}
+		return
+	}
+	if len(r.registrations) >= r.maxFamilies {
+		panic("metric: family limit exceeded")
+	}
+	r.registrations[sanitized] = signature
+}
+
+// SetAttributeFilter filters metric dimension values.
+// Configure before registering any measurements.
+func (r *Registry) SetAttributeFilter(filter func(attr.Attr) (attr.Attr, bool)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.budget.filter = filter
 }

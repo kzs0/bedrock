@@ -14,6 +14,7 @@ type Histogram struct {
 	help       string
 	buckets    []float64
 	labelNames map[string]struct{}
+	budget     *seriesBudget
 	mu         sync.RWMutex
 	values     map[string]*histogramValue
 }
@@ -31,6 +32,13 @@ func (h *Histogram) With(labels ...attr.Attr) HistogramVec {
 	verified := buf[:0]
 	var overflow []attr.Attr
 	for _, label := range labels {
+		if h.budget != nil && h.budget.filter != nil {
+			var keep bool
+			label, keep = h.budget.filter(label)
+			if !keep {
+				continue
+			}
+		}
 		sanitized := sanitizeName(label.Key)
 		if _, ok := h.labelNames[sanitized]; !ok {
 			continue
@@ -51,6 +59,7 @@ func (h *Histogram) With(labels ...attr.Attr) HistogramVec {
 		verified = overflow
 	}
 
+	verified = attr.NewSet(verified...).Attrs()
 	key := labelsKey(verified)
 
 	h.mu.RLock()
@@ -67,6 +76,11 @@ func (h *Histogram) With(labels ...attr.Attr) HistogramVec {
 	// Double-check after acquiring write lock
 	if hv, ok = h.values[key]; ok {
 		return HistogramVec{value: hv, buckets: h.buckets}
+	}
+
+	if h.budget != nil && len(h.values) >= int(h.budget.limit.Load()) {
+		h.budget.dropped.Add(1)
+		return HistogramVec{}
 	}
 
 	hv = &histogramValue{
@@ -123,6 +137,9 @@ type HistogramVec struct {
 
 // Observe adds a single observation to the histogram.
 func (hv HistogramVec) Observe(v float64) {
+	if hv.value == nil {
+		return
+	}
 	// Increment count
 	hv.value.count.Add(1)
 

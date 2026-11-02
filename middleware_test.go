@@ -181,7 +181,7 @@ func TestHTTPMiddleware_OperationCreated(t *testing.T) {
 		if a.Key == "http.method" && a.Value.AsString() == "GET" {
 			hasMethod = true
 		}
-		if a.Key == "http.path" && a.Value.AsString() == "/users" {
+		if a.Key == "http.path" && a.Value.AsString() == "_" {
 			hasPath = true
 		}
 		return true

@@ -61,6 +61,6 @@ func SpanContextFromContext(ctx context.Context) SpanContext {
 		SpanID:     span.spanID,
 		Tracestate: span.tracestate,
 		IsRemote:   false, // Local span
-		Sampled:    true,  // If span exists, it's sampled (not dropped)
+		Sampled:    span.sampled,
 	}
 }

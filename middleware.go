@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/kzs0/bedrock/attr"
 	httpProp "github.com/kzs0/bedrock/trace/http"
@@ -32,10 +33,9 @@ func HTTPMiddleware(ctx context.Context, handler http.Handler, opts ...Middlewar
 		// Build initial attributes
 		attrs := []attr.Attr{
 			attr.String("http.method", r.Method),
-			attr.String("http.path", r.URL.Path),
+			attr.String("http.path", "_"),
 			attr.String("http.scheme", r.URL.Scheme),
 			attr.String("http.host", r.Host),
-			attr.String("http.user_agent", r.UserAgent()),
 		}
 
 		// Add custom attributes if provided
@@ -72,7 +72,6 @@ func HTTPMiddleware(ctx context.Context, handler http.Handler, opts ...Middlewar
 		}
 
 		op, opCtx := Operation(reqCtx, cfg.operationName, opOpts...)
-		defer op.Done()
 
 		// Wrap response writer to capture status code
 		rw := &responseWriter{
@@ -81,23 +80,32 @@ func HTTPMiddleware(ctx context.Context, handler http.Handler, opts ...Middlewar
 			wroteHeader:    false,
 		}
 
-		// Call next handler with operation context
-		handler.ServeHTTP(wrapResponseWriter(rw), r.WithContext(opCtx))
-
-		// Add status code as attribute
-		op.Register(opCtx, attr.Int("http.status_code", rw.status))
-
-		// Register failure if error status
-		if cfg.successStatusCodes != nil {
-			if !cfg.successStatusCodes[rw.status] {
-				op.Register(opCtx, attr.Error(fmt.Errorf("HTTP %d", rw.status)))
+		request := r.WithContext(opCtx)
+		defer func() {
+			failed := recover()
+			route := request.Pattern
+			if i := strings.IndexByte(route, ' '); i >= 0 {
+				route = route[i+1:]
 			}
-		} else {
-			// Default: 4xx and 5xx are failures
-			if rw.status >= 400 {
-				op.Register(opCtx, attr.Error(fmt.Errorf("HTTP %d", rw.status)))
+			if route == "" {
+				route = "_"
 			}
-		}
+			op.Register(opCtx, attr.String("http.path", route))
+			if failed != nil {
+				op.Register(opCtx, attr.Error(fmt.Errorf("HTTP handler panic")))
+			} else {
+				op.Register(opCtx, attr.Int("http.status_code", rw.status))
+				if (cfg.successStatusCodes != nil && !cfg.successStatusCodes[rw.status]) || (cfg.successStatusCodes == nil && rw.status >= 400) {
+					op.Register(opCtx, attr.Error(fmt.Errorf("HTTP %d", rw.status)))
+				}
+			}
+			op.Done()
+			if failed != nil {
+				panic(failed)
+			}
+		}()
+		handler.ServeHTTP(wrapResponseWriter(rw), request)
+
 	})
 }
 
@@ -176,6 +184,10 @@ type responseWriter struct {
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
+	if code >= 100 && code < 200 && code != http.StatusSwitchingProtocols {
+		rw.ResponseWriter.WriteHeader(code)
+		return
+	}
 	if !rw.wroteHeader {
 		rw.status = code
 		rw.wroteHeader = true

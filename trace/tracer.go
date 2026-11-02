@@ -6,6 +6,7 @@ import (
 
 	"github.com/kzs0/bedrock/attr"
 	"github.com/kzs0/bedrock/internal"
+	"github.com/kzs0/bedrock/privacy"
 )
 
 // Exporter exports finished spans.
@@ -29,6 +30,7 @@ type Tracer struct {
 	resource    attr.Set
 	sampler     Sampler
 	exporter    Exporter
+	policy      *privacy.Policy
 }
 
 // TracerConfig configures the tracer.
@@ -37,6 +39,7 @@ type TracerConfig struct {
 	Resource    attr.Set
 	Sampler     Sampler
 	Exporter    Exporter
+	DataPolicy  *privacy.Policy
 }
 
 // NewTracer creates a new tracer.
@@ -46,9 +49,11 @@ func NewTracer(cfg TracerConfig) *Tracer {
 		sampler = AlwaysSampler{}
 	}
 
+	cfg.DataPolicy = cfg.DataPolicy.Snapshot()
 	return &Tracer{
+		policy:      cfg.DataPolicy,
 		serviceName: cfg.ServiceName,
-		resource:    cfg.Resource,
+		resource:    cfg.DataPolicy.Resource(cfg.Resource),
 		sampler:     sampler,
 		exporter:    cfg.Exporter,
 	}
@@ -80,21 +85,22 @@ func (t *Tracer) StartSpan(ctx context.Context, name string, parentSpan *Span, r
 	} else if parentSpan != nil {
 		traceID = parentSpan.traceID
 		parentID = parentSpan.spanID
-		parentSampled = true
+		parentSampled = parentSpan.sampled
 		tracestate = parentSpan.tracestate
 	} else {
 		traceID = internal.NewTraceID()
 	}
 
-	result := t.sampler.ShouldSample(traceID, name, parentSampled)
+	result := t.sample(traceID, name, parentSampled, !parentID.IsZero())
 	if result.Decision == SamplingDecisionDrop {
 		noopSpan := &Span{
-			name:      name,
-			traceID:   traceID,
-			spanID:    internal.NewSpanID(),
-			parentID:  parentID,
-			startTime: time.Now(),
-			ended:     true,
+			name:       name,
+			traceID:    traceID,
+			spanID:     internal.NewSpanID(),
+			parentID:   parentID,
+			startTime:  time.Now(),
+			tracestate: tracestate,
+			ended:      true,
 		}
 		return ContextWithSpan(ctx, noopSpan), noopSpan
 	}
@@ -107,6 +113,7 @@ func (t *Tracer) StartSpan(ctx context.Context, name string, parentSpan *Span, r
 		startTime:  time.Now(),
 		tracestate: tracestate,
 		tracer:     t,
+		sampled:    result.Decision == SamplingDecisionRecordAndSample,
 	}
 	// Attrs are deferred to Done() via SetAttrSet; no alloc at span creation.
 	_ = attrs
@@ -140,7 +147,7 @@ func (t *Tracer) Start(ctx context.Context, name string, opts ...StartSpanOption
 	} else if parent != nil {
 		traceID = parent.traceID
 		parentID = parent.spanID
-		parentSampled = true // If parent exists and wasn't dropped, it was sampled
+		parentSampled = parent.sampled
 		// Inherit tracestate from parent span for propagation
 		tracestate = parent.tracestate
 	} else {
@@ -148,16 +155,17 @@ func (t *Tracer) Start(ctx context.Context, name string, opts ...StartSpanOption
 	}
 
 	// Check sampling decision
-	result := t.sampler.ShouldSample(traceID, name, parentSampled)
+	result := t.sample(traceID, name, parentSampled, !parentID.IsZero())
 	if result.Decision == SamplingDecisionDrop {
 		// Return a no-op span
 		noopSpan := &Span{
-			name:      name,
-			traceID:   traceID,
-			spanID:    internal.NewSpanID(),
-			parentID:  parentID,
-			startTime: time.Now(),
-			ended:     true, // Mark as ended so it's not exported
+			name:       name,
+			traceID:    traceID,
+			spanID:     internal.NewSpanID(),
+			parentID:   parentID,
+			startTime:  time.Now(),
+			tracestate: tracestate,
+			ended:      true, // Mark as ended so it's not exported
 		}
 		return ContextWithSpan(ctx, noopSpan), noopSpan
 	}
@@ -169,9 +177,10 @@ func (t *Tracer) Start(ctx context.Context, name string, opts ...StartSpanOption
 		parentID:   parentID,
 		kind:       options.Kind,
 		startTime:  time.Now(),
-		attrs:      attr.NewSet(options.Attrs...),
+		attrs:      t.policy.Apply(attr.NewSet(options.Attrs...)),
 		tracestate: tracestate,
 		tracer:     t,
+		sampled:    result.Decision == SamplingDecisionRecordAndSample,
 	}
 
 	return ContextWithSpan(ctx, span), span
@@ -248,4 +257,14 @@ func WithRemoteParent(parent SpanContext) StartSpanOption {
 	return func(o *StartSpanOptions) {
 		o.RemoteParent = &parent
 	}
+}
+
+func (t *Tracer) sample(id internal.TraceID, name string, sampled, present bool) SamplingResult {
+	if _, ok := t.sampler.(*ParentBasedSampler); ok && present {
+		if sampled {
+			return SamplingResult{Decision: SamplingDecisionRecordAndSample}
+		}
+		return SamplingResult{Decision: SamplingDecisionDrop}
+	}
+	return t.sampler.ShouldSample(id, name, sampled)
 }

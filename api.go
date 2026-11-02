@@ -125,7 +125,10 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 
 	// Auto-detect environment attributes. User-supplied WithStaticAttrs values
 	// take precedence because they are appended last (attr.NewSet last-wins).
-	detected := detectEnvironment()
+	var detected []attr.Attr
+	if !cfg.config.DisableEnvironmentDetection {
+		detected = detectEnvironment()
+	}
 	allStatic := append(detected, cfg.staticAttrs...)
 
 	b, err := New(*cfg.config, allStatic...)
@@ -159,7 +162,7 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 	}
 
 	cleanup := func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.config.ShutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), b.config.ShutdownTimeout)
 		defer cancel()
 
 		// Shutdown obs server first if it exists

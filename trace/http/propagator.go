@@ -106,13 +106,13 @@ func (p *Propagator) Inject(ctx context.Context, carrier any) error {
 	}
 
 	span := trace.SpanFromContext(ctx)
-	if span == nil || !span.IsRecording() {
+	if span == nil {
 		return nil
 	}
 
 	// Get span's sampled status
 	// For now, assume recording = sampled
-	sampled := true
+	sampled := trace.SpanContextFromContext(ctx).Sampled
 
 	// Format and set traceparent header using W3C utilities
 	traceparent := w3c.FormatTraceparent(span.TraceID(), span.SpanID(), sampled)
@@ -123,6 +123,8 @@ func (p *Propagator) Inject(ctx context.Context, carrier any) error {
 	spanCtx := trace.SpanContextFromContext(ctx)
 	if spanCtx.Tracestate != "" {
 		headers.Set(tracestateHeader, spanCtx.Tracestate)
+	} else {
+		headers.Del(tracestateHeader)
 	}
 
 	return nil

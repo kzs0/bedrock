@@ -2,8 +2,10 @@ package bedrock
 
 import (
 	"fmt"
+	"github.com/kzs0/bedrock/privacy"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -14,6 +16,18 @@ import (
 
 // Config configures the Bedrock instance.
 type Config struct {
+	// DisableEnvironmentDetection avoids metadata discovery.
+	DisableEnvironmentDetection bool `env:"BEDROCK_DISABLE_ENVIRONMENT_DETECTION" envDefault:"false"`
+	// DataPolicy filters all emitted telemetry.
+	DataPolicy *privacy.Policy `env:"-"`
+	// Profiles configures independent OTLP profile export.
+	Profiles *ProfileExportConfig `env:"-"`
+	// MetricSeriesLimit bounds series per metric family.
+	MetricSeriesLimit int `env:"BEDROCK_METRIC_SERIES_LIMIT" envDefault:"1000"`
+	// MetricFamilyLimit bounds registered metric families.
+	MetricFamilyLimit int `env:"BEDROCK_METRIC_FAMILY_LIMIT" envDefault:"1000"`
+	// ServerProfileHandler supplies optional debugging handlers.
+	ServerProfileHandler http.Handler `env:"-"`
 	// Service is the name of the service.
 	Service string `env:"BEDROCK_SERVICE" envDefault:"unknown"`
 
@@ -51,7 +65,7 @@ type Config struct {
 	// LogOutput is the log output writer. Defaults to os.Stderr.
 	LogOutput io.Writer `env:"-"`
 	// LogAddSource adds source code position to log output.
-	LogAddSource bool `env:"BEDROCK_LOG_ADD_SOURCE" envDefault:"true"`
+	LogAddSource bool `env:"BEDROCK_LOG_ADD_SOURCE" envDefault:"false"`
 	// LogCanonical enables structured logging of operation completion.
 	LogCanonical bool `env:"BEDROCK_LOG_CANONICAL" envDefault:"false"`
 
@@ -70,7 +84,7 @@ type Config struct {
 	ServerAddr string `env:"BEDROCK_SERVER_ADDR" envDefault:"127.0.0.1:9090"`
 	// ServerMetrics enables /metrics endpoint.
 	ServerMetrics bool `env:"BEDROCK_SERVER_METRICS" envDefault:"true"`
-	// ServerPprof enables /debug/pprof endpoints.
+	// ServerPprof enables explicitly supplied debug handlers.
 	ServerPprof bool `env:"BEDROCK_SERVER_PPROF" envDefault:"false"`
 	// ServerReadTimeout is the max request read duration.
 	ServerReadTimeout time.Duration `env:"BEDROCK_SERVER_READ_TIMEOUT" envDefault:"10s"`
@@ -91,10 +105,12 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		Service:                 "unknown",
+		MetricSeriesLimit:       1000,
+		MetricFamilyLimit:       1000,
 		TraceSampleRate:         1.0,
 		LogLevel:                "info",
 		LogFormat:               "json",
-		LogAddSource:            true,
+		LogAddSource:            false,
 		LogCanonical:            false,
 		RuntimeMetrics:          true,
 		ServerEnabled:           true,
@@ -175,6 +191,7 @@ func (c Config) serverConfig() server.Config {
 		Addr:              c.ServerAddr,
 		EnableMetrics:     c.ServerMetrics,
 		EnablePprof:       c.ServerPprof,
+		ProfileHandler:    c.ServerProfileHandler,
 		ReadTimeout:       c.ServerReadTimeout,
 		ReadHeaderTimeout: c.ServerReadHeaderTimeout,
 		WriteTimeout:      c.ServerWriteTimeout,

@@ -2,6 +2,7 @@ package metric
 
 import (
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ type Counter struct {
 	name       string
 	help       string
 	labelNames map[string]struct{}
+	budget     *seriesBudget
 	mu         sync.RWMutex
 	values     map[string]*counterValue
 }
@@ -29,6 +31,13 @@ func (c *Counter) With(labels ...attr.Attr) CounterVec {
 	verified := buf[:0]
 	var overflow []attr.Attr
 	for _, label := range labels {
+		if c.budget != nil && c.budget.filter != nil {
+			var keep bool
+			label, keep = c.budget.filter(label)
+			if !keep {
+				continue
+			}
+		}
 		sanitized := sanitizeName(label.Key)
 		if _, ok := c.labelNames[sanitized]; !ok {
 			continue
@@ -49,6 +58,7 @@ func (c *Counter) With(labels ...attr.Attr) CounterVec {
 		verified = overflow
 	}
 
+	verified = attr.NewSet(verified...).Attrs()
 	key := labelsKey(verified)
 
 	c.mu.RLock()
@@ -65,6 +75,11 @@ func (c *Counter) With(labels ...attr.Attr) CounterVec {
 	// Double-check after acquiring write lock
 	if cv, ok = c.values[key]; ok {
 		return CounterVec{value: cv}
+	}
+
+	if c.budget != nil && len(c.values) >= int(c.budget.limit.Load()) {
+		c.budget.dropped.Add(1)
+		return CounterVec{}
 	}
 
 	cv = &counterValue{
@@ -127,6 +142,9 @@ func (cv CounterVec) Add(v float64) {
 }
 
 func (cv CounterVec) add(delta float64) {
+	if cv.value == nil {
+		return
+	}
 	for {
 		oldBits := cv.value.bits.Load()
 		newValue := math.Float64frombits(oldBits) + delta
@@ -153,9 +171,13 @@ func labelsKey(labels []attr.Attr) string {
 		if i > 0 {
 			sb.WriteByte('|')
 		}
+		sb.WriteString(strconv.Itoa(len(a.Key)))
+		sb.WriteByte(':')
 		sb.WriteString(a.Key)
-		sb.WriteByte('=')
-		sb.WriteString(a.Value.String())
+		value := a.Value.String()
+		sb.WriteString(strconv.Itoa(len(value)))
+		sb.WriteByte(':')
+		sb.WriteString(value)
 	}
 	return sb.String()
 }

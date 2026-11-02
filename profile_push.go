@@ -3,7 +3,9 @@ package bedrock
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"runtime/pprof"
@@ -22,32 +24,8 @@ const (
 	ProfileTypeHeap      ProfileType = "heap"
 	ProfileTypeGoroutine ProfileType = "goroutine"
 	ProfileTypeMutex     ProfileType = "mutex"
+	ProfileTypeBlock     ProfileType = "block"
 )
-
-// startProfilePush starts a background goroutine that periodically collects
-// Go runtime profiles and sends them to the managed platform as OTLP Profiles
-// requests. The returned function stops the goroutine.
-//
-// Profile collection is non-blocking to the ticker: if collection is already
-// running when the next tick fires, that tick is skipped.
-func startProfilePush(
-	service string,
-	resource attr.Set,
-	logger *slog.Logger,
-	cfg cloudConfig,
-) func(ctx context.Context) {
-	endpoint := cfg.endpoint + "/v1/profiles"
-	profileInterval := cfg.profileInterval
-	if profileInterval <= 0 {
-		profileInterval = defaultProfileInterval
-	}
-	ticker := time.NewTicker(profileInterval)
-
-	collect := func(ctx context.Context, pt ProfileType) error {
-		return collectAndPushProfile(ctx, service, resource, endpoint, cfg.apiKey, cfg.profileCPUSampleDur, pt)
-	}
-	return startProfilePushWorker(ticker.C, ticker.Stop, logger, collect)
-}
 
 type collectProfileFunc func(context.Context, ProfileType) error
 
@@ -85,7 +63,7 @@ func startProfilePushWorker(
 				collectionDone = done
 				go func() {
 					defer close(done)
-					profiles := []ProfileType{ProfileTypeCPU, ProfileTypeHeap, ProfileTypeGoroutine, ProfileTypeMutex}
+					profiles := []ProfileType{ProfileTypeCPU, ProfileTypeHeap, ProfileTypeGoroutine, ProfileTypeMutex, ProfileTypeBlock}
 					for _, pt := range profiles {
 						if workerCtx.Err() != nil {
 							return
@@ -135,19 +113,54 @@ func collectAndPushProfile(
 	cpuSampleDur time.Duration,
 	pt ProfileType,
 ) error {
+	cfg := ProfileExportConfig{Endpoint: endpoint, Headers: map[string]string{"Authorization": "Bearer " + apiKey}, Timeout: 30 * time.Second, CPUSampleDuration: cpuSampleDur, MaxBytes: 8 << 20}
+	return collectAndPushProfileWithConfig(ctx, service, resource, cfg, http.DefaultClient, pt, otlp.ProfileEncodingOptions{})
+}
+
+// ErrCPUProfilerBusy identifies conflicting CPU profiling.
+var ErrCPUProfilerBusy = errors.New("CPU profiler already in use")
+
+var cpuProfileSlot = make(chan struct{}, 1)
+
+type limitedProfileBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (b *limitedProfileBuffer) Write(data []byte) (int, error) {
+	if len(data) > b.limit-b.Len() {
+		return 0, fmt.Errorf("profile exceeds collection limit")
+	}
+	return b.Buffer.Write(data)
+}
+
+func collectAndPushProfileWithConfig(ctx context.Context, service string, resource attr.Set, cfg ProfileExportConfig, client *http.Client, pt ProfileType, encoding otlp.ProfileEncodingOptions) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	start := time.Now()
-	var buf bytes.Buffer
+	var buf limitedProfileBuffer
+	buf.limit = cfg.MaxBytes
+	if buf.limit <= 0 {
+		buf.limit = 8 << 20
+	}
 
 	switch pt {
 	case ProfileTypeCPU:
-		if err := pprof.StartCPUProfile(&buf); err != nil {
-			return fmt.Errorf("cpu profile start: %w", err)
+		if cfg.CPUSampleDuration <= 0 {
+			return fmt.Errorf("cpu profile duration must be positive")
 		}
-		waitErr := waitForProfileSample(ctx, cpuSampleDur)
+		select {
+		case cpuProfileSlot <- struct{}{}:
+			defer func() { <-cpuProfileSlot }()
+		default:
+			return ErrCPUProfilerBusy
+		}
+		if err := pprof.StartCPUProfile(&buf); err != nil {
+			return fmt.Errorf("cpu profile start: %w: %v", ErrCPUProfilerBusy, err)
+		}
+		waitErr := waitForProfileSample(ctx, cfg.CPUSampleDuration)
 		pprof.StopCPUProfile()
 		if waitErr != nil {
 			return fmt.Errorf("cpu profile wait: %w", waitErr)
@@ -171,8 +184,8 @@ func collectAndPushProfile(
 			return fmt.Errorf("goroutine profile: %w", err)
 		}
 
-	case ProfileTypeMutex:
-		p := pprof.Lookup("mutex")
+	case ProfileTypeMutex, ProfileTypeBlock:
+		p := pprof.Lookup(string(pt))
 		if p == nil {
 			return nil
 		}
@@ -189,29 +202,61 @@ func collectAndPushProfile(
 
 	end := time.Now()
 
-	encoded := otlp.EncodeProfile(service, resource, string(pt), buf.Bytes(), start, end)
+	encoded, err := otlp.EncodeProfileChecked(service, resource, string(pt), buf.Bytes(), start, end, encoding)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > buf.limit {
+		return fmt.Errorf("profile exceeds upload limit")
+	}
 
-	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	requestCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(encoded))
-	if err != nil {
-		return fmt.Errorf("profile request: %w", err)
+	for attempt := 0; attempt <= cfg.Retries; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(time.Duration(attempt) * 100 * time.Millisecond)
+			select {
+			case <-requestCtx.Done():
+				timer.Stop()
+				return requestCtx.Err()
+			case <-timer.C:
+			}
+		}
+		req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, cfg.Endpoint, bytes.NewReader(encoded))
+		if err != nil {
+			return fmt.Errorf("profile request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/x-protobuf")
+		for key, value := range cfg.Headers {
+			req.Header.Set(key, value)
+		}
+		req.Header.Set("x-profile-type", string(pt))
+		resp, err := client.Do(req)
+		if err != nil {
+			if attempt < cfg.Retries && requestCtx.Err() == nil {
+				continue
+			}
+			if requestCtx.Err() != nil {
+				return requestCtx.Err()
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				return context.DeadlineExceeded
+			}
+			return fmt.Errorf("profile HTTP delivery failed")
+		}
+		status := resp.StatusCode
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+		if status >= 200 && status < 300 {
+			return nil
+		}
+		if (status == 429 || status >= 500) && attempt < cfg.Retries {
+			continue
+		}
+		return fmt.Errorf("profile push returned status %d", status)
 	}
-	req.Header.Set("Content-Type", "application/x-protobuf")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("x-profile-type", string(pt))
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("profile http: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("profile push: unexpected status %d for type %s", resp.StatusCode, pt)
-	}
-	return nil
+	return fmt.Errorf("profile retries exhausted")
 }
 
 func waitForProfileSample(ctx context.Context, duration time.Duration) error {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kzs0/bedrock/attr"
+	"github.com/kzs0/bedrock/privacy"
 	"github.com/kzs0/bedrock/trace"
 )
 
@@ -206,7 +207,7 @@ func TestEncodeSpans_WithEvents(t *testing.T) {
 }
 
 func TestEncodeSpans_WithStatus(t *testing.T) {
-	tracer := trace.NewTracer(trace.TracerConfig{ServiceName: "test"})
+	tracer := trace.NewTracer(trace.TracerConfig{ServiceName: "test", DataPolicy: &privacy.Policy{AllowErrorDetails: true}})
 	_, span := tracer.Start(context.Background(), "with-error")
 	span.SetStatus(trace.StatusError, "something went wrong")
 	span.End()

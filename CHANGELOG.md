@@ -9,6 +9,10 @@ pre-1.0, minor releases may include intentional API or behavior changes.
 
 ### Added
 
+- Independent OTLP HTTP profile exports with native experimental v0.2.0 sample conversion, TLS, type selection, limits, retries and export statistics.
+- Shared telemetry privacy policy, metadata opt-out, metric cardinality limits and visible export drops.
+- Official OTLP profile decoder and schema-checking receiver compatibility tests.
+
 - Added `Op.End` with explicit success and failure outcome overrides.
 - Added registry-level configurable histogram buckets.
 - Added automated verification and GitHub Release publication for semantic
@@ -17,6 +21,11 @@ pre-1.0, minor releases may include intentional API or behavior changes.
   release guidance.
 
 ### Changed
+
+- Core imports no longer register global pprof routes. HTTP profiling requires explicit optional handler injection.
+- Safe telemetry defaults omit raw URLs/paths, user agents, infrastructure identifiers, error details and full source paths; explicit policy options restore reviewed fields.
+- Zero sampling rate disables recording. Metric registration rejects name/schema conflicts and bounds families and series.
+- Profile encoding uses the maintained Google pprof parser; the small parser dependency preserves the Go 1.24 baseline.
 
 - Operation completion is idempotent: the first `Done` or `End` call wins.
 - Metric registries and Bedrock instances defensively copy histogram bucket
@@ -44,6 +53,11 @@ pre-1.0, minor releases may include intentional API or behavior changes.
   reconnect behavior, and supports both TLS with ALPN and cleartext h2c.
 
 ### Fixed
+
+- Bounded batch export concurrency and historical errors; preserved cancellation and drain ordering.
+- HTTP informational responses, panic outcome metrics, request ownership and NoTrace client descendants.
+- Unsampled trace propagation, parent-based decisions, label identity collisions and thread metric reporting.
+- Init cleanup now uses effective shutdown defaults; explicit profile workers join Bedrock shutdown.
 
 - Counters preserve fractional increments during atomic concurrent updates.
 - Counters ignore negative and NaN updates without corrupting their value.

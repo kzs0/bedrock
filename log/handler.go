@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kzs0/bedrock/attr"
+	"github.com/kzs0/bedrock/privacy"
 )
 
 // Handler is a custom slog.Handler that injects trace context into logs.
@@ -20,6 +21,8 @@ type Handler struct {
 
 // HandlerOptions configures the Handler.
 type HandlerOptions struct {
+	// Policy filters log attributes before writing.
+	Policy *privacy.Policy
 	// Level is the minimum log level to output.
 	Level slog.Leveler
 	// AddSource adds source code position to log output.
@@ -44,7 +47,31 @@ func NewHandler(opts *HandlerOptions) *Handler {
 	}
 
 	var inner slog.Handler
+	policy := opts.Policy.Snapshot()
 	handlerOpts := &slog.HandlerOptions{
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if len(groups) == 0 && a.Key == slog.SourceKey {
+				if !policy.AllowSourcePaths {
+					return slog.Attr{}
+				}
+				return a
+			}
+			if len(groups) == 0 && (a.Key == slog.LevelKey || a.Key == slog.TimeKey) {
+				return a
+			}
+			if len(groups) == 0 && a.Key == slog.MessageKey {
+				value, keep := policy.Value(a.Key, a.Value.Any())
+				if !keep {
+					return slog.Attr{}
+				}
+				return slog.Any(a.Key, value)
+			}
+			clean, keep := policy.GroupAttribute(groups, attr.Any(a.Key, a.Value.Any()))
+			if !keep {
+				return slog.Attr{}
+			}
+			return slog.Any(clean.Key, clean.Value.AsAny())
+		},
 		Level:     opts.Level,
 		AddSource: opts.AddSource,
 	}

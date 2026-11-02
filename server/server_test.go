@@ -158,6 +158,7 @@ func TestMetricsEndpoint_Disabled(t *testing.T) {
 func TestPprofEndpoint_Enabled(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.EnablePprof = true
+	cfg.ProfileHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	srv := newTestServer(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
