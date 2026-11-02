@@ -286,26 +286,19 @@ jobs:
             });
 
             // ── Compose body ────────────────────────────────────────────────
-            const headline  = anyFailed ? '## ❌ Tests or Coverage Failed' : '## ✅ Tests and Coverage Passed';
-            const summary   = [
-              `**${totalPass + totalFail + totalSkip}** tests run`,
-              `**${totalPass}** passed`,
-              `**${totalFail}** failed`,
-              `**${totalSkip}** skipped`,
-              `unit coverage **${totalCov}**`,
-            ].join(' · ');
-
+            const headline = anyFailed ? '### Tests need attention' : '### All tests passed';
+            const unitResult = `${totalPass} passed${totalFail ? ` · ${totalFail} failed` : ''}${totalSkip ? ` · ${totalSkip} skipped` : ''}`;
+            const e2eResult = e2eReport.passed ? `${e2eReport.passedCount} scenarios passed` : 'Failed or incomplete';
             const parts = [
-              '<!-- bedrock-test-report -->',
-              headline,
-              '',
-              summary,
-              '',
-              e2eReport.markdown,
-              '',
-              '### Unit package results',
-              '',
-              table,
+              '<!-- bedrock-test-report -->', headline, '',
+              '| Suite | Result | Coverage |', '|---|---|---:|',
+              `| Unit | ${unitResult} | ${totalCov} |`,
+              `| E2E (${e2eReport.version}) | ${e2eResult} | ${e2eReport.coverage} |`, '',
+              '<sub>Unit: all core packages. E2E: linked library code, excluding fixtures. These percentages are separate.</sub>', '',
+              `[Logs & coverage inventories](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`, '',
+              e2eReport.markdown, '',
+              testExit !== 0 || coverageExit !== 0 ? '<details open>' : '<details>',
+              '<summary>Unit test details</summary>', '', table,
             ];
 
             if (failSections.length > 0) {
@@ -341,7 +334,7 @@ jobs:
               parts.push(
                 '',
                 '<details>',
-                `<summary>🔴 ${rows.length} uncovered functions (0%) — click to expand</summary>`,
+                `<summary>${rows.length} functions not covered by unit tests</summary>`,
                 '',
                 '| Package | File | Function |',
                 '|---------|------|----------|',
@@ -365,7 +358,7 @@ jobs:
               parts.push(
                 '',
                 '<details>',
-                `<summary>🟡 ${rows.length} partially covered functions (&lt;80%) — click to expand</summary>`,
+                `<summary>${rows.length} functions with partial unit coverage</summary>`,
                 '',
                 '| Package | File | Function | Coverage |',
                 '|---------|------|----------|---------|',
@@ -374,7 +367,7 @@ jobs:
               );
             }
 
-            parts.push('', `<sub>Commit ${context.sha.slice(0, 7)} · ${new Date().toUTCString()}</sub>`);
+            parts.push('', '</details>', '', `<sub>Updated for ${context.sha.slice(0, 7)}</sub>`);
             const body = parts.join('\n');
 
             // ── Post or update comment ──────────────────────────────────────

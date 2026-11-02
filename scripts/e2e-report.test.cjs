@@ -13,11 +13,12 @@ const config = { log: success, coverage: 'total: (statements) 62.6%\n', exitCode
 test('renders top-level scenarios and separate coverage', () => {
   const report = renderE2EReport(config);
   assert.equal(report.passed, true);
-  assert.match(report.markdown, /TestProfiles.*pass.*1\.23s/);
+  assert.match(report.markdown, /Profiles.*pass.*1\.23s/);
   assert.doesNotMatch(report.markdown, /TestProfiles\/heap/);
-  assert.match(report.markdown, /62\.6%/);
+  assert.equal(report.coverage, '62.6%');
   assert.match(report.markdown, /Go 1\.24\.13/);
-  assert.match(report.markdown, /separate from unit coverage/);
+  assert.match(report.markdown, /<summary>E2E scenarios · 1 passed/);
+  assert.doesNotMatch(report.markdown, /<details open>/);
 });
 
 test('does not hide failing executions behind passing events', () => {
@@ -36,7 +37,7 @@ test('reports failed scenarios with available diagnostics', () => {
   const log = [event({ Test: 'TestProfiles', Action: 'fail' }), event({ Action: 'fail' })].join('\n');
   const report = renderE2EReport({ ...config, log });
   assert.equal(report.passed, false);
-  assert.match(report.markdown, /TestProfiles.*fail/);
+  assert.match(report.markdown, /Profiles.*fail/);
 });
 
 test('does not substitute another package for e2e results', () => {
