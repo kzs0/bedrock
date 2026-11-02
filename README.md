@@ -1344,7 +1344,8 @@ go tool pprof goroutine.prof
 Bedrock requires Go 1.24 or newer. CI builds and runs race-enabled tests on Go
 1.24, builds and runs ordinary tests on Go 1.24, 1.26, and 1.27, and separately checks
 80% aggregate coverage, formatting, vet, lint, the nested `bench` module, and
-known vulnerabilities. Before opening a pull request, run:
+known vulnerabilities. Required E2E smoke jobs run on Go 1.24.13 and 1.27.3
+without Docker or vendor services. Before opening a pull request, run:
 
 ```bash
 go build ./...
@@ -1354,6 +1355,40 @@ make ci
 Use Go 1.27 for CI-equivalent local results. The aggregate `make ci` target
 uses tooling requiring Go 1.26 or newer; the library itself retains its
 Go 1.24 baseline.
+
+`make e2e` builds and runs a real application against local test receivers.
+`make e2e-race` races both the harness and application subprocess. The latest-Go
+PR E2E job combines race instrumentation with subprocess coverage; the baseline
+job collects ordinary subprocess coverage.
+`make e2e-coverage` additionally records application subprocess coverage in
+`.coverage-e2e/`, exports `coverage-e2e.out`, and writes a file/function inventory.
+CI uploads these counters, the inventory, and diagnostics for 14 days, including
+on failure. E2E shutdown must finish normally to write application counters.
+The E2E percentage covers only library packages linked into the fixture;
+optional packages such as `profile/handler.go` remain uninstrumented and appear
+as such in the inventory. Fixture main is instrumented for Go's exit hook,
+then excluded from the exported library profile and percentage denominator.
+
+`make coverage` instruments every root library package, including calls from
+other packages' tests, while excluding runnable examples from both the tests
+and coverage denominator. It retains the 80% statement coverage gate and writes
+`coverage-inventory.md`, listing every library source file, every reported
+function, and zero-coverage functions. Files with no executable statements are
+shown separately from executable files missing instrumentation. E2E coverage
+is reported separately; percentages are never added to unit coverage. Tests in
+nested modules do not contribute to the root unit profile. Inventory generation
+requires Python 3 and uses only its standard library.
+
+The root library has zero third-party dependencies. Official protocol decoders
+and compatibility oracles belong only to the isolated `compat/otlp` module;
+benchmark dependencies belong to `bench`.
+
+`make fuzz-smoke` runs the native pprof parser and nested privacy policy fuzzers
+for ten seconds each with two workers. PR CI runs this smoke target on Go
+1.27.3; ordinary baseline tests also execute their seed corpora. The scheduled
+and manually dispatched Native Fuzz workflow runs each fuzzer for five minutes,
+with test and job deadlines. Failures retain logs and reproducer corpora for
+14 days. Extended fault matrices remain future work beyond the PR smoke suite.
 
 The module is pre-1.0, so minor releases can include intentional API or
 behavior changes. Review [CHANGELOG.md](CHANGELOG.md) before upgrading,

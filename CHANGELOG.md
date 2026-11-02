@@ -9,6 +9,9 @@ pre-1.0, minor releases may include intentional API or behavior changes.
 
 ### Added
 
+- Public-API subprocess E2E tests cover telemetry, profiles, privacy, lifecycle, cloud, gRPC, and TLS behavior.
+- Separate cross-package unit and linked-library E2E coverage inventories, plus bounded PR and scheduled native fuzzing.
+
 - Independent OTLP HTTP profile exports with native experimental v0.2.0 sample conversion, TLS, type selection, limits, retries and export statistics.
 - Shared telemetry privacy policy, metadata opt-out, metric cardinality limits and visible export drops.
 - Official OTLP profile decoder and schema-checking receiver compatibility tests.
@@ -56,6 +59,8 @@ pre-1.0, minor releases may include intentional API or behavior changes.
   reconnect behavior, and supports both TLS with ALPN and cleartext h2c.
 
 ### Fixed
+
+- Preserve repeated zero-valued native profile samples and classify inbound HTTP spans as server spans.
 
 - Bounded batch export concurrency and historical errors; preserved cancellation and drain ordering.
 - HTTP informational responses, panic outcome metrics, request ownership and NoTrace client descendants.

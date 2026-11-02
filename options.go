@@ -61,6 +61,7 @@ const (
 	opOptSuccess
 	opOptFailure
 	opOptRemoteParent
+	opOptSpanKind
 )
 
 // operationOnlyOption is an option that only works on operations.
@@ -70,6 +71,7 @@ type operationOnlyOption struct {
 	labelNames   []string
 	err          error
 	remoteParent trace.SpanContext
+	spanKind     trace.SpanKind
 }
 
 func (o operationOnlyOption) applyToOperation(c *operationConfig) {
@@ -82,6 +84,8 @@ func (o operationOnlyOption) applyToOperation(c *operationConfig) {
 	case opOptFailure:
 		c.success = false
 		c.failure = o.err
+	case opOptSpanKind:
+		c.spanKind = o.spanKind
 	case opOptRemoteParent:
 		c.remoteParent = &o.remoteParent
 	}
@@ -90,6 +94,7 @@ func (o operationOnlyOption) applyToOperation(c *operationConfig) {
 // operationConfig holds configuration for an operation.
 type operationConfig struct {
 	name         string
+	spanKind     trace.SpanKind
 	attrs        []attr.Attr
 	metricLabels []string           // defined metric label names (registered upfront)
 	success      bool               // whether the operation succeeded (for auto metrics)

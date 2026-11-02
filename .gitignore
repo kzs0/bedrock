@@ -13,3 +13,9 @@ bedrock.test
 
 # Test coverage output
 coverage.out
+
+coverage-*.out
+coverage*-inventory.md
+.coverage-e2e/
+e2e-results.json
+e2e-diagnostics.txt

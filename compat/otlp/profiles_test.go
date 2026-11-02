@@ -51,7 +51,7 @@ func TestProfilePayloadAcceptedBySchemaCheckingReceiver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("receiver rejected export: %d %s", resp.StatusCode, body)

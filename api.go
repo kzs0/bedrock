@@ -239,7 +239,15 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 		}
 		// StartSpan avoids closure allocations: parent and remote parent are
 		// direct parameters; attrs are synced to span at Done() via SetAttrSet.
-		newCtx, span = b.tracer.StartSpan(ctx, cfg.name, parentSpan, cfg.remoteParent, cfg.attrs)
+		if cfg.spanKind == trace.SpanKindInternal {
+			newCtx, span = b.tracer.StartSpan(ctx, cfg.name, parentSpan, cfg.remoteParent, cfg.attrs)
+		} else {
+			spanOpts := []trace.StartSpanOption{trace.WithSpanKind(cfg.spanKind), trace.WithParent(parentSpan)}
+			if cfg.remoteParent != nil {
+				spanOpts = append(spanOpts, trace.WithRemoteParent(*cfg.remoteParent))
+			}
+			newCtx, span = b.tracer.Start(ctx, cfg.name, spanOpts...)
+		}
 	}
 
 	// Create operation state

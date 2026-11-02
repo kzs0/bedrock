@@ -144,7 +144,8 @@ func EncodeProfileChecked(service string, resource attr.Set, profileType string,
 		for j, sample := range parsed.Sample {
 			so := b.beginMsg(2)
 			b.appendVarintField(1, uint64(stackIndices[j]))
-			b.appendVarintField(2, uint64(sample.Value[i]))
+			b.appendTag(2, 0)
+			b.appendRawVarint(uint64(sample.Value[i]))
 			for _, index := range labelIndices[j] {
 				b.appendVarintField(3, uint64(index))
 			}
