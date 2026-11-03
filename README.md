@@ -1,99 +1,22 @@
 # Bedrock
 
-An opinionated observability library for Go that provides tracing, metrics, profiling, and structured logging with automatic instrumentation.
+Bedrock is an observability library for Go built around operations: named units
+of work that connect traces, metrics, and structured logs. Initialize it once,
+pass context through your application, and finish each operation with `Done()`.
 
-## Instrumentation safety and OTLP profiles
-
-The core library has zero third-party dependencies. External compatibility and benchmark tooling lives in isolated Go modules.
-
-Profiles are exported to a configured OTLP HTTP collector. Importing the core package registers no pprof routes. A cloud account and an HTTP observability server are unnecessary:
-
-```go
-cfg := bedrock.DefaultConfig()
-cfg.ServerEnabled = false
-cfg.Profiles = &bedrock.ProfileExportConfig{
-    Endpoint: "https://collector.example/v1/profiles",
-    Headers: map[string]string{"Authorization": "Bearer " + token},
-    Types: []bedrock.ProfileType{bedrock.ProfileTypeCPU, bedrock.ProfileTypeHeap},
-    Interval: time.Minute,
-    CPUSampleDuration: 10 * time.Second,
-}
-ctx, stop := bedrock.Init(context.Background(), bedrock.WithConfig(cfg))
-defer stop()
-```
-
-The encoder targets experimental `opentelemetry-proto/profiles/v1development` **v0.2.0**. It translates pprof sample types, values, stacks, functions, and mappings into native OTLP dictionaries and profiles. It does not tunnel raw pprof. The isolated `compat/otlp` suite verifies official decoding and a schema-checking HTTP receiver. Configure a receiver that supports this exact schema; compatibility with newer experimental schemas or any vendor backend is not implied.
-
-`ProfileExportConfig` supports TLS configuration, explicit `AllowHTTP` for local plaintext collectors, per-type selection, a delivery timeout, an upload/collection size limit, and up to three retries. Profile export follows no redirects. Default profile types are CPU, heap, and goroutine. `Types: []bedrock.ProfileType{}` disables collection. CPU windows must be positive and shorter than the interval. `CloudProfiles()` disables cloud profiling independently of traces and metrics.
-
-CPU profiling is process-wide: other agents and manual sessions can own it. Conflicting collection is skipped, never stopped. `ProfileStats()` exposes exports, failures and skips. Explicit exporters started with `StartProfileExport` are also stopped by `Shutdown`. Mutex and block sampling are disabled by the Go runtime unless configured. `MutexSampleFraction` refuses conflicting existing settings; positive `BlockSampleRate` explicitly changes the process-wide block sampler. These explicit runtime settings persist after export stops; coordinate them with other agents.
-
-Automatic telemetry now excludes URL credentials, query strings, fragments, raw outgoing paths, incoming user agents, infrastructure identifiers, error details and full source paths by default. Incoming HTTP metrics use Go route templates or `_` for unmatched/custom routers. Configure explicit additional attributes for an intentionally reviewed field. Request/response bodies and arbitrary HTTP headers are not automatically captured.
-
-`Config.DataPolicy` accepts `privacy.Policy` from `github.com/kzs0/bedrock/privacy`. `AttributeKeys` and `ResourceKeys` independently allowlist attributes and resources; nil attribute keys keep non-sensitive fields, while nil resource keys omit host/process/Kubernetes/container identifiers. Set `DisableEnvironmentDetection` to avoid metadata discovery entirely. `AllowErrorDetails`, `AllowSourcePaths` and `AllowProfileLabels` are explicit opt-ins. Profile labels pass through the same policy. The concurrent-safe `Redact` callback receives qualified group/map paths and handles application-specific data in attributes, nested maps/slices, errors, status messages and log fields. Unknown structured values are suppressed. Each traversal is limited to 4,096 nodes; cycles and repeated aliases use explicit markers. Grouped allowlists use qualified paths or a group prefix. Error and exception namespaces remain private through group ancestry unless details are explicitly enabled. Checked profile encoding rejects post-policy attributes exceeding 64 items, 4,096 nodes, or depth eight instead of silently shortening them. No heuristic reliably detects arbitrary secrets in free text; review your callback and exported fields. Collected heap profiles describe allocation samples, not live object contents.
-
-Metric dimensions no longer automatically include infrastructure resources. Default bounds are 1,000 families and 1,000 series per family, configured through `MetricFamilyLimit` and `MetricSeriesLimit`. `Metrics().DroppedSeries()` and batch processor `Stats()` expose rejected measurements. Overflow spans/series are dropped; family/schema/name conflicts panic at registration so configuration mistakes are visible. Use stable operation names. `TraceSampleRate: 0` now disables recording; use `DefaultConfig()` for defaults rather than expecting zero fields to mean sampling enabled.
-
-For optional HTTP debugging, explicitly import `github.com/kzs0/bedrock/profile` and provide `profile.Handler()` through `server.Config.ProfileHandler` (plus `EnablePprof`) or `Config.ServerProfileHandler` (plus `ServerPprof`). The flag alone enables no handlers. The optional package imports standard `net/http/pprof`, which also registers global handlers; use isolated authenticated muxes. Its explicit handlers accept GET only and bound collection to thirty seconds. OTLP export remains the recommended production path.
-
-
-## Features
-
-- **Context-based**: No globals, everything flows through `context.Context`
-- **Automatic metrics**: Every operation records count, success, failure, and duration (milliseconds)
-- **Controlled cardinality**: Define metric labels upfront with `_` defaults for missing values
-- **Success by default**: Operations succeed unless errors are registered
-- **Clean API**: `Init()`, `Operation()`, `Source()`, `Step()` with `Done()` methods
-- **W3C Trace Context**: Standards-compliant distributed tracing with automatic propagation
-- **HTTP middleware**: Automatic operation setup for HTTP handlers with trace extraction
-- **HTTP client**: Instrumented clients with automatic trace injection and span creation
-- **Observability server**: Built-in endpoints for metrics and health checks
-- **Environment configuration**: Parse from env vars or provide explicit config
-- **Canonical logging**: Complete operation lifecycle logging for analysis
-- **Convenient APIs**: Direct logging and metrics functions without manual setup
-- **Production-ready**: Security timeouts, graceful shutdown, DoS protection, trace sampling
-- **Cloud backend**: One-line `WithCloud()` integration sends traces, metrics, and profiles to the managed Bedrock platform
-- **Auto environment detection**: Process, Kubernetes pod, container ID, and cloud provider attributes detected and attached automatically
-
-## Table of Contents
-
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-  - [Initialization](#1-initialization)
-  - [Operations](#2-operations)
-  - [Sources](#3-sources)
-  - [Steps](#4-steps)
-  - [Success by Default](#5-success-by-default)
-  - [W3C Trace Context Propagation](#6-w3c-trace-context-propagation)
-- [API Reference](#api-reference)
-  - [Initialization](#initialization)
-  - [Operations](#operations)
-  - [Sources](#sources)
-  - [Steps](#steps)
-  - [HTTP Middleware](#http-middleware)
-  - [HTTP Client Instrumentation](#http-client-instrumentation)
-  - [Convenient Logging](#convenient-logging)
-  - [Convenient Metrics](#convenient-metrics)
-- [Configuration](#configuration)
-  - [Environment Variables](#environment-variables)
-  - [Programmatic](#programmatic)
-  - [Security Defaults](#security-defaults)
-- [Cloud Backend](#cloud-backend)
-- [Environment Auto-Detection](#environment-auto-detection)
-- [Examples](#examples)
-  - [HTTP Service](#http-service)
-  - [Background Worker](#background-worker)
-  - [Nested Operations](#nested-operations)
-  - [HTTP Client with Distributed Tracing](#http-client-with-distributed-tracing)
-  - [Custom Metrics](#custom-metrics)
-  - [Canonical Logging](#canonical-logging-1)
-- [Metrics](#metrics)
-- [Full-Stack Observability](#full-stack-observability)
-- [Development, Compatibility, and Support](#development-compatibility-and-support)
-- [Design Principles](#design-principles)
-- [License](#license)
+The core library uses only the Go standard library. Compatibility and benchmark
+tooling live in separate Go modules.
 
 ## Quick Start
+
+Requires Go 1.24 or newer. Install Bedrock:
+
+```bash
+go get github.com/kzs0/bedrock
+```
+
+Initialize once, wrap your HTTP handlers, and name the application work you want
+to observe:
 
 ```go
 package main
@@ -101,7 +24,7 @@ package main
 import (
     "context"
     "net/http"
-    
+
     "github.com/kzs0/bedrock"
     "github.com/kzs0/bedrock/attr"
 )
@@ -110,11 +33,11 @@ func main() {
     // 1. Initialize bedrock
     ctx, close := bedrock.Init(context.Background())
     defer close()
-    
+
     // 2. Setup HTTP handler
     mux := http.NewServeMux()
     mux.HandleFunc("/users", handleUsers)
-    
+
     // 3. Wrap with middleware
     handler := bedrock.HTTPMiddleware(ctx, mux)
     http.ListenAndServe(":8080", handler)
@@ -123,15 +46,48 @@ func main() {
 func handleUsers(w http.ResponseWriter, r *http.Request) {
     op, ctx := bedrock.Operation(r.Context(), "http.get_users")
     defer op.Done()
-    
+
     op.Register(ctx, attr.Int("user_count", 42))
-    
+
     // Convenient logging (includes static attributes automatically)
     bedrock.Info(ctx, "processing request", attr.String("user_id", "123"))
-    
+
     // Your logic here
 }
 ```
+
+Request `/users` to record request and application operations. The log includes
+the current trace context, and operation counts and durations are available at
+`http://127.0.0.1:9090/metrics`. Configure a collector in
+[Configuration](#configuration) to export traces.
+
+## Features
+
+- **Operations and steps** connect application work across traces, metrics, and logs.
+- **Distributed tracing** propagates W3C Trace Context through HTTP handlers and clients.
+- **Automatic metrics** record counts, outcomes, and durations with explicit label schemas.
+- **Structured logging** includes contextual attributes and optional operation lifecycle records.
+- **Profiling** exports selected runtime profiles to an OTLP collector.
+- **Configuration** supports environment variables, explicit settings, and telemetry privacy policies.
+- **Backends** support local collectors and optional managed Bedrock integration.
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Features](#features)
+- [Core Concepts](#core-concepts)
+- [API Reference](#api-reference)
+- [Configuration](#configuration)
+- [Telemetry Privacy](#telemetry-privacy)
+- [Metrics and Observability Server](#metrics)
+- [Profiles](#profiles)
+- [Cloud Backend](#cloud-backend)
+- [Environment Auto-Detection](#environment-auto-detection)
+- [Examples](#examples)
+- [Full-Stack Observability](#full-stack-observability)
+- [Development, Compatibility, and Support](#development-compatibility-and-support)
+- [Design Principles](#design-principles)
+- [License](#license)
 
 ## Core Concepts
 
@@ -187,7 +143,7 @@ if err != nil {
 
 **Automatic Metrics** (per operation):
 - `<name>_count{labels}` - Total operations
-- `<name>_successes{labels}` - Successful operations  
+- `<name>_successes{labels}` - Successful operations
 - `<name>_failures{labels}` - Failed operations
 - `<name>_duration_ms{labels}` - Duration histogram in milliseconds
 
@@ -213,7 +169,7 @@ source, ctx := bedrock.Source(ctx, "background.worker",
 defer source.Done()
 
 // Track aggregates (Sum, Gauge, Histogram)
-source.Aggregate(ctx, 
+source.Aggregate(ctx,
     attr.Sum("loops", 1),
     attr.Gauge("queue_depth", 42),
     attr.Histogram("latency_ms", 123.45),
@@ -352,7 +308,7 @@ func (p *KafkaPropagator) Inject(ctx context.Context, carrier any) error {
     if span == nil {
         return nil
     }
-    
+
     traceparent := w3c.FormatTraceparent(span.TraceID(), span.SpanID(), true)
     *headers = append(*headers, kafka.Header{
         Key:   "traceparent",
@@ -413,7 +369,7 @@ defer close()
 - `WithStaticAttrs(...attr.Attr)` - Static attributes for all operations
 - `WithLogLevel(string)` - Set log level ("debug", "info", "warn", "error")
 
-**Returns**: 
+**Returns**:
 - Updated context with bedrock instance
 - Cleanup function for graceful shutdown
 
@@ -561,9 +517,9 @@ For one-off requests without creating a client:
 resp, err := bedrock.Get(ctx, "https://api.example.com/users")
 
 // POST request
-resp, err := bedrock.Post(ctx, 
+resp, err := bedrock.Post(ctx,
     "https://api.example.com/users",
-    "application/json", 
+    "application/json",
     bytes.NewReader(jsonBody))
 
 // Full control with custom request
@@ -582,7 +538,7 @@ HTTP clients automatically propagate trace context across service boundaries:
 func handleRequest(w http.ResponseWriter, r *http.Request) {
     op, ctx := bedrock.Operation(r.Context(), "handle_request")
     defer op.Done()
-    
+
     // This request becomes a child span and shares the same trace_id
     resp, err := bedrock.Get(ctx, "https://downstream-service/api")
     if err != nil {
@@ -590,7 +546,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
         http.Error(w, err.Error(), 500)
         return
     }
-    
+
     // Downstream service receives traceparent header linking to this trace
 }
 ```
@@ -726,6 +682,8 @@ ctx, close := bedrock.Init(ctx, bedrock.WithConfig(cfg.Bedrock))
 defer close()
 ```
 
+`TraceSampleRate: 0` now disables recording; use `DefaultConfig()` for defaults rather than expecting zero fields to mean sampling enabled.
+
 ### Security Defaults
 
 Bedrock provides production-ready security defaults to protect against DoS attacks and resource exhaustion.
@@ -809,6 +767,160 @@ go func() {
 }()
 
 appServer.ListenAndServe()
+```
+
+## Telemetry Privacy
+
+Automatic telemetry excludes URL credentials, query strings, fragments, raw
+outgoing paths, incoming user agents, infrastructure identifiers, error details,
+and full source paths by default. Request/response bodies and arbitrary HTTP
+headers are not automatically captured. Incoming HTTP metrics use Go route
+templates or `_` for unmatched/custom routers.
+
+`Config.DataPolicy` accepts `privacy.Policy` from
+`github.com/kzs0/bedrock/privacy`:
+
+- `AttributeKeys` and `ResourceKeys` independently allowlist attributes and resources.
+  Nil attribute keys keep non-sensitive fields; nil resource keys omit
+  host/process/Kubernetes/container identifiers.
+- `AllowErrorDetails`, `AllowSourcePaths`, and `AllowProfileLabels` are explicit
+  opt-ins. Profile labels pass through the same policy.
+- `Redact` handles application-specific data in attributes, nested maps/slices,
+  errors, status messages, and log fields. The callback must support concurrent
+  calls and receives qualified group/map paths.
+
+Unknown structured values are suppressed. Each traversal is limited to 4,096
+nodes; cycles and repeated aliases use explicit markers. Grouped allowlists use
+qualified paths or a group prefix. Error and exception namespaces remain private
+through group ancestry unless details are explicitly enabled. Checked profile
+encoding rejects post-policy attributes exceeding 64 items, 4,096 nodes, or
+depth eight instead of silently shortening them.
+
+Set `DisableEnvironmentDetection` to avoid metadata discovery entirely. Add
+explicit attributes only for fields you intend to export. No heuristic reliably
+detects arbitrary secrets in free text; review your callback and exported fields.
+
+## Metrics
+
+Automatic metrics for every operation:
+
+```
+# Operation count
+process_user_count{user_id="123",status="active",env="production"} 10
+
+# Successes
+process_user_successes{user_id="123",status="active",env="production"} 9
+
+# Failures
+process_user_failures{user_id="123",status="active",env="production"} 1
+
+# Duration in milliseconds (histogram)
+process_user_duration_ms_bucket{user_id="123",status="active",env="production",le="10"} 5
+process_user_duration_ms_bucket{user_id="123",status="active",env="production",le="50"} 8
+process_user_duration_ms_sum{user_id="123",status="active",env="production"} 234.5
+process_user_duration_ms_count{user_id="123",status="active",env="production"} 10
+```
+
+**Note**: Static attributes (e.g., `env="production"`) are automatically added to all metrics.
+
+Metric dimensions do not automatically include infrastructure resources. Default bounds are 1,000 families and 1,000 series per family, configured through `MetricFamilyLimit` and `MetricSeriesLimit`. `Metrics().DroppedSeries()` and batch processor `Stats()` expose rejected measurements. Overflow spans/series are dropped; family/schema/name conflicts panic at registration so configuration mistakes are visible. Use stable operation names.
+
+Prometheus encoding validates the complete gathered snapshot before writing.
+Histogram bucket bounds must be finite and strictly increasing; cumulative
+bucket counts must be monotonic and cannot exceed the total count. Invalid
+custom bucket configuration therefore makes `prometheus.Encode` return an
+error, and the built-in `/metrics` handler responds with HTTP 500 without a
+partial exposition. Validate custom buckets during configuration rollout.
+
+### Observability Server
+
+The observability server provides Prometheus metrics and health checks on a
+loopback-only listener by default. `Init` starts it automatically when
+`ServerEnabled` is true. To manage it yourself, set `ServerEnabled` to false
+and create a server:
+
+```go
+import "github.com/kzs0/bedrock/server"
+
+b := bedrock.FromContext(ctx)
+obsServer := server.New(b.Metrics(), server.DefaultConfig())
+go obsServer.ListenAndServe()
+```
+
+**Available Endpoints**:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/metrics` | Prometheus exposition format metrics |
+| `/health` | Health check (returns "ok") |
+| `/ready` | Readiness check (returns "ok") |
+
+**Usage Examples**:
+
+```bash
+# View metrics
+curl http://localhost:9090/metrics
+
+# Check health
+curl http://localhost:9090/health
+```
+
+## Profiles
+
+### OTLP Export
+
+Profiles are exported to a configured OTLP HTTP collector. Importing the core package registers no pprof routes. A cloud account and an HTTP observability server are unnecessary:
+
+```go
+cfg := bedrock.DefaultConfig()
+cfg.ServerEnabled = false
+cfg.Profiles = &bedrock.ProfileExportConfig{
+    Endpoint: "https://collector.example/v1/profiles",
+    Headers: map[string]string{"Authorization": "Bearer " + token},
+    Types: []bedrock.ProfileType{bedrock.ProfileTypeCPU, bedrock.ProfileTypeHeap},
+    Interval: time.Minute,
+    CPUSampleDuration: 10 * time.Second,
+}
+ctx, stop := bedrock.Init(context.Background(), bedrock.WithConfig(cfg))
+defer stop()
+```
+
+The encoder targets experimental `opentelemetry-proto/profiles/v1development` **v0.2.0**. It translates pprof sample types, values, stacks, functions, and mappings into native OTLP dictionaries and profiles. It does not tunnel raw pprof. The isolated `compat/otlp` suite verifies official decoding and a schema-checking HTTP receiver. Configure a receiver that supports this exact schema; compatibility with newer experimental schemas or any vendor backend is not implied.
+
+`ProfileExportConfig` supports TLS configuration, explicit `AllowHTTP` for local plaintext collectors, per-type selection, a delivery timeout, an upload/collection size limit, and up to three retries. Profile export follows no redirects. Default profile types are CPU, heap, and goroutine. `Types: []bedrock.ProfileType{}` disables collection. CPU windows must be positive and shorter than the interval. `CloudProfiles()` disables cloud profiling independently of traces and metrics.
+
+CPU profiling is process-wide: other agents and manual sessions can own it. Conflicting collection is skipped, never stopped. `ProfileStats()` exposes exports, failures and skips. Explicit exporters started with `StartProfileExport` are also stopped by `Shutdown`. Mutex and block sampling are disabled by the Go runtime unless configured. `MutexSampleFraction` refuses conflicting existing settings; positive `BlockSampleRate` explicitly changes the process-wide block sampler. These explicit runtime settings persist after export stops; coordinate them with other agents.
+
+Collected heap profiles describe allocation samples, not live object contents.
+
+### Optional HTTP Debugging
+
+For optional HTTP debugging, explicitly import `github.com/kzs0/bedrock/profile` and provide `profile.Handler()` through `server.Config.ProfileHandler` (plus `EnablePprof`) or `Config.ServerProfileHandler` (plus `ServerPprof`). The flag alone enables no handlers. The optional package imports standard `net/http/pprof`, which also registers global handlers; use isolated authenticated muxes. Its explicit handlers accept GET only and bound collection to thirty seconds. OTLP export remains the recommended production path.
+
+These endpoints are available only after explicitly supplying the debug handler:
+
+| Endpoint | Purpose |
+|---|---|
+| `/debug/pprof/` | pprof index with all available profiles |
+| `/debug/pprof/profile?seconds=N` | CPU profile (30s default) |
+| `/debug/pprof/heap` | Heap memory profile |
+| `/debug/pprof/goroutine` | Goroutine stack traces |
+| `/debug/pprof/allocs` | Memory allocation profile |
+| `/debug/pprof/block` | Block contention profile |
+| `/debug/pprof/mutex` | Mutex contention profile |
+| `/debug/pprof/threadcreate` | Thread creation profile |
+| `/debug/pprof/trace?seconds=N` | Execution trace |
+
+With those handlers configured:
+
+```bash
+# CPU profile (30 seconds)
+curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30
+go tool pprof cpu.prof
+
+# Heap profile with visualization
+curl -o heap.prof http://localhost:9090/debug/pprof/heap
+go tool pprof -http=:8081 heap.prof
 ```
 
 ## Cloud Backend
@@ -906,10 +1018,10 @@ func main() {
 func handler(w http.ResponseWriter, r *http.Request) {
     op, ctx := bedrock.Operation(r.Context(), "handle_request")
     defer op.Done()
-    
+
     op.Register(ctx, attr.String("custom", "value"))
     bedrock.Info(ctx, "processing request")
-    
+
     w.Write([]byte("OK"))
 }
 ```
@@ -920,10 +1032,10 @@ func handler(w http.ResponseWriter, r *http.Request) {
 func main() {
     ctx, close := bedrock.Init(context.Background())
     defer close()
-    
+
     source, ctx := bedrock.Source(ctx, "worker")
     defer source.Done()
-    
+
     for job := range jobs {
         source.Aggregate(ctx, attr.Sum("jobs_processed", 1))
         processJob(ctx, job)
@@ -935,7 +1047,7 @@ func processJob(ctx context.Context, job Job) {
         bedrock.Attrs(attr.String("job.id", job.ID)),
     )
     defer op.Done()
-    
+
     if err := job.Execute(); err != nil {
         op.Register(ctx, attr.Error(err))
         bedrock.Error(ctx, "job failed", attr.Error(err))
@@ -949,14 +1061,14 @@ func processJob(ctx context.Context, job Job) {
 func handleRequest(w http.ResponseWriter, r *http.Request) {
     op, ctx := bedrock.Operation(r.Context(), "handle_request")
     defer op.Done()
-    
+
     user, err := getUser(ctx, "123")
     if err != nil {
         op.Register(ctx, attr.Error(err))
         http.Error(w, err.Error(), 500)
         return
     }
-    
+
     json.NewEncoder(w).Encode(user)
 }
 
@@ -966,13 +1078,13 @@ func getUser(ctx context.Context, id string) (*User, error) {
         bedrock.MetricLabels("user.id"),
     )
     defer op.Done()
-    
+
     user, err := db.Get(id)
     if err != nil {
         op.Register(ctx, attr.Error(err))
         return nil, err
     }
-    
+
     return user, nil
 }
 ```
@@ -985,63 +1097,63 @@ Example of making HTTP requests with automatic trace propagation:
 func main() {
     ctx, close := bedrock.Init(context.Background())
     defer close()
-    
+
     // Create reusable instrumented client
     client := bedrock.NewClient(&http.Client{
         Timeout: 30 * time.Second,
     })
-    
+
     mux := http.NewServeMux()
     mux.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
         handleAPI(w, r, client)
     })
-    
+
     http.ListenAndServe(":8080", bedrock.HTTPMiddleware(ctx, mux))
 }
 
 func handleAPI(w http.ResponseWriter, r *http.Request, client *http.Client) {
     op, ctx := bedrock.Operation(r.Context(), "api.aggregate_data")
     defer op.Done()
-    
+
     // Make parallel requests to downstream services
     // All share the same trace_id and become child spans
     var wg sync.WaitGroup
     results := make(chan Response, 3)
-    
+
     services := []string{
         "http://users-service/api/users",
         "http://orders-service/api/orders",
         "http://inventory-service/api/inventory",
     }
-    
+
     for _, url := range services {
         wg.Add(1)
         go func(serviceURL string) {
             defer wg.Done()
-            
+
             // Each request creates a child span with automatic trace propagation
             resp, err := client.Get(serviceURL)
             if err != nil {
-                bedrock.Error(ctx, "service request failed", 
+                bedrock.Error(ctx, "service request failed",
                     attr.String("url", serviceURL),
                     attr.Error(err))
                 return
             }
             defer resp.Body.Close()
-            
+
             // Process response
             var data Response
             json.NewDecoder(resp.Body).Decode(&data)
             results <- data
         }(url)
     }
-    
+
     wg.Wait()
     close(results)
-    
+
     // Aggregate results
     aggregated := aggregateResults(results)
-    
+
     op.Register(ctx, attr.Int("total_results", len(aggregated)))
     json.NewEncoder(w).Encode(aggregated)
 }
@@ -1050,7 +1162,7 @@ func handleAPI(w http.ResponseWriter, r *http.Request, client *http.Client) {
 func fetchUserData(ctx context.Context, userID string) (*User, error) {
     op, ctx := bedrock.Operation(ctx, "fetch_user")
     defer op.Done()
-    
+
     // Simple GET request
     resp, err := bedrock.Get(ctx, "https://api.example.com/users/"+userID)
     if err != nil {
@@ -1058,24 +1170,24 @@ func fetchUserData(ctx context.Context, userID string) (*User, error) {
         return nil, err
     }
     defer resp.Body.Close()
-    
+
     var user User
     if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
         op.Register(ctx, attr.Error(err))
         return nil, err
     }
-    
+
     return &user, nil
 }
 
 func createOrder(ctx context.Context, order *Order) error {
     op, ctx := bedrock.Operation(ctx, "create_order")
     defer op.Done()
-    
+
     body, _ := json.Marshal(order)
-    
+
     // Simple POST request
-    resp, err := bedrock.Post(ctx, 
+    resp, err := bedrock.Post(ctx,
         "https://api.example.com/orders",
         "application/json",
         bytes.NewReader(body))
@@ -1084,13 +1196,13 @@ func createOrder(ctx context.Context, order *Order) error {
         return err
     }
     defer resp.Body.Close()
-    
+
     if resp.StatusCode >= 400 {
         err := fmt.Errorf("create order failed: %s", resp.Status)
         op.Register(ctx, attr.Error(err))
         return err
     }
-    
+
     return nil
 }
 ```
@@ -1114,30 +1226,30 @@ func main() {
         ),
     )
     defer close()
-    
+
     // Create custom metrics (static labels automatically included)
-    requestCounter := bedrock.Counter(ctx, "api_requests_total", 
+    requestCounter := bedrock.Counter(ctx, "api_requests_total",
         "Total API requests", "endpoint", "method")
-    
+
     cacheHits := bedrock.Counter(ctx, "cache_hits_total",
         "Total cache hits", "cache_type")
-    
+
     queueDepth := bedrock.Gauge(ctx, "queue_depth",
         "Current queue depth", "queue_name")
-    
+
     latency := bedrock.Histogram(ctx, "query_latency_ms",
         "Query latency in milliseconds", nil, "db_type")
-    
+
     // Use metrics
     requestCounter.With(
         attr.String("endpoint", "/users"),
         attr.String("method", "GET"),
     ).Inc()
-    
+
     cacheHits.With(attr.String("cache_type", "redis")).Inc()
     queueDepth.With(attr.String("queue_name", "jobs")).Set(42)
     latency.With(attr.String("db_type", "postgres")).Observe(123.45)
-    
+
     // Or use without additional labels (static labels only)
     cacheHits.Inc()
     queueDepth.Set(10)
@@ -1186,89 +1298,6 @@ op.Register(ctx, attr.String("status", "active"))
 - Automatic trace correlation
 - Useful for debugging and analysis
 
-## Metrics
-
-Automatic metrics for every operation:
-
-```
-# Operation count
-process_user_count{user_id="123",status="active",env="production"} 10
-
-# Successes
-process_user_successes{user_id="123",status="active",env="production"} 9
-
-# Failures  
-process_user_failures{user_id="123",status="active",env="production"} 1
-
-# Duration in milliseconds (histogram)
-process_user_duration_ms_bucket{user_id="123",status="active",env="production",le="10"} 5
-process_user_duration_ms_bucket{user_id="123",status="active",env="production",le="50"} 8
-process_user_duration_ms_sum{user_id="123",status="active",env="production"} 234.5
-process_user_duration_ms_count{user_id="123",status="active",env="production"} 10
-```
-
-**Note**: Static attributes (e.g., `env="production"`) are automatically added to all metrics.
-
-Prometheus encoding validates the complete gathered snapshot before writing.
-Histogram bucket bounds must be finite and strictly increasing; cumulative
-bucket counts must be monotonic and cannot exceed the total count. Invalid
-custom bucket configuration therefore makes `prometheus.Encode` return an
-error, and the built-in `/metrics` handler responds with HTTP 500 without a
-partial exposition. Validate custom buckets during configuration rollout.
-
-**Observability Server**:
-
-The observability server provides metrics and health checks by default. Profiling
-endpoints require an explicitly imported debug handler as described above. The default server registers no profiling endpoints:
-
-```go
-import "github.com/kzs0/bedrock/server"
-
-b := bedrock.FromContext(ctx)
-obsServer := server.New(b.Metrics(), server.Config{
-    // Wildcard binding and pprof are explicit opt-ins for controlled networks.
-    Addr:          "0.0.0.0:9090",
-    EnableMetrics: true,
-    EnablePprof:   false,
-})
-go obsServer.ListenAndServe()
-```
-
-**Available Endpoints**:
-
-| Endpoint | Purpose |
-|----------|---------|
-| `/metrics` | Prometheus exposition format metrics |
-| `/health` | Health check (returns "ok") |
-| `/ready` | Readiness check (returns "ok") |
-| `/debug/pprof/` | pprof index with all available profiles |
-| `/debug/pprof/profile?seconds=N` | CPU profile (30s default) |
-| `/debug/pprof/heap` | Heap memory profile |
-| `/debug/pprof/goroutine` | Goroutine stack traces |
-| `/debug/pprof/allocs` | Memory allocation profile |
-| `/debug/pprof/block` | Block contention profile |
-| `/debug/pprof/mutex` | Mutex contention profile |
-| `/debug/pprof/threadcreate` | Thread creation profile |
-| `/debug/pprof/trace?seconds=N` | Execution trace |
-
-**Usage Examples**:
-
-```bash
-# View metrics
-curl http://localhost:9090/metrics
-
-# CPU profile (30 seconds)
-curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30
-go tool pprof cpu.prof
-
-# Heap profile with visualization
-curl -o heap.prof http://localhost:9090/debug/pprof/heap
-go tool pprof -http=:8081 heap.prof
-
-# Check health
-curl http://localhost:9090/health
-```
-
 ## Full-Stack Observability
 
 Bedrock includes a complete observability stack example with Docker Compose:
@@ -1308,28 +1337,10 @@ docker-compose up -d
 - OTLP profile export through `BEDROCK_PROFILE_ENDPOINT`
 - Health checks for all services
 
-**Profiling Options**:
-
-1. **Optional manual debugging** (requires explicit authenticated HTTP handlers):
-```bash
-# CPU profile (30 seconds)
-curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30
-go tool pprof cpu.prof
-
-# Heap profile
-curl -o heap.prof http://localhost:9090/debug/pprof/heap
-go tool pprof heap.prof
-
-# Goroutine profile
-curl -o goroutine.prof http://localhost:9090/debug/pprof/goroutine
-go tool pprof goroutine.prof
-```
-
-2. **Continuous profiling** (OTLP Profiles receiver):
-- Receives exports from the configured OTLP endpoint
-- View flamegraphs in Grafana or Pyroscope UI
-- Compare profiles over time
-- Analyze CPU, memory (alloc/inuse), goroutines, mutex, and block profiles
+For profiling, configure a receiver compatible with the experimental OTLP
+schema described in [Profiles](#profiles). The included Pyroscope scraper
+configuration is optional and inactive without explicit debug handlers; see
+[Optional HTTP Debugging](#optional-http-debugging) for manual collection.
 
 **Configuration Files**:
 - `docker-compose.yml` - Stack orchestration
