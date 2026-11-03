@@ -171,7 +171,7 @@ jobs:
           go vet ./...
 
   e2e:
-    name: E2E smoke (Go ${{ matrix.go-version }})
+    name: Functional E2E (Go ${{ matrix.go-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -192,7 +192,7 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
           cache-dependency-path: compat/otlp/go.sum
-      - name: Run instrumented E2E smoke
+      - name: Run instrumented functional E2E
         env:
           E2E_RACE: ${{ matrix.race }}
           E2E_TEST_FLAGS: ${{ matrix.test-flags }}

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -36,6 +37,11 @@ type fixtureConfig struct {
 	SampleRate              *float64
 	ErrorDetails            bool
 	ProfileLabels           bool
+	MetricFamilyLimit       int
+	ProfileTimeoutMillis    int
+	ProfileRetries          int
+	ProfileMaxBytes         int
+	ShutdownMillis          int
 	MetricSeriesLimit       int
 	CPUWindowMillis         int
 	ProfileIntervalMillis   int
@@ -256,14 +262,33 @@ func (a *fixtureApp) Stop(t *testing.T) {
 	}
 }
 
+func (a *fixtureApp) Signal(t *testing.T) {
+	t.Helper()
+	if err := a.SignalError(t); err != nil {
+		t.Errorf("fixture signal exit: %v\n%s", err, a.Logs())
+	}
+}
+
+func (a *fixtureApp) SignalError(t *testing.T) error {
+	t.Helper()
+	return a.stopWith(t, true)
+}
+
 func (a *fixtureApp) StopError(t *testing.T) error {
+	t.Helper()
+	return a.stopWith(t, false)
+}
+
+func (a *fixtureApp) stopWith(t *testing.T, signal bool) error {
 	t.Helper()
 	a.stopObserved = true
 	a.stop.Do(func() {
 		select {
 		case <-a.done:
 		default:
-			if a.ControlURL != "" {
+			if signal {
+				_ = a.cmd.Process.Signal(syscall.SIGTERM)
+			} else if a.ControlURL != "" {
 				client := &http.Client{Timeout: time.Second}
 				resp, err := client.Post(a.ControlURL+"/shutdown", "", nil)
 				if err == nil {
@@ -279,7 +304,7 @@ func (a *fixtureApp) StopError(t *testing.T) error {
 			case <-timer.C:
 				_ = a.cmd.Process.Kill()
 				<-a.done
-				a.stopErr = fmt.Errorf("fixture shutdown timed out")
+				a.stopErr = fmt.Errorf("fixture shutdown timed out; forced kill")
 			}
 		}
 		if a.stopErr == nil {
@@ -287,6 +312,31 @@ func (a *fixtureApp) StopError(t *testing.T) error {
 		}
 	})
 	return a.stopErr
+}
+
+type fixtureStats struct {
+	Trace    struct{ DroppedSpans, FailedExports uint64 } `json:"trace"`
+	Profiles struct{ Exported, Failed, Skipped uint64 }   `json:"profiles"`
+	Metrics  struct{ DroppedSeries uint64 }               `json:"metrics"`
+}
+
+func (a *fixtureApp) FinalStats(t *testing.T) fixtureStats {
+	t.Helper()
+	select {
+	case <-a.done:
+	default:
+		t.Fatal("final stats require fixture shutdown")
+	}
+	for _, line := range strings.Split(a.Logs(), "\n") {
+		var record struct {
+			Stats *fixtureStats `json:"fixture_final_stats"`
+		}
+		if json.Unmarshal([]byte(line), &record) == nil && record.Stats != nil {
+			return *record.Stats
+		}
+	}
+	t.Fatal("fixture final stats missing")
+	return fixtureStats{}
 }
 
 type exportRequest struct {
@@ -347,4 +397,48 @@ func (r *receiver) SetHandler(handler func(http.ResponseWriter, *http.Request)) 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.handler = handler
+}
+
+func TestFixtureControlBoundaries(t *testing.T) {
+	app := startApp(t, fixtureConfig{ShutdownMillis: 500})
+	client := &http.Client{Timeout: 2 * time.Second}
+	for _, tc := range []struct {
+		query string
+		want  int
+		count int
+	}{{"n=", 400, 0}, {"n=-1", 400, 0}, {"n=10001", 400, 0}, {"n=invalid", 400, 0}, {"n=0", 200, 0}, {"n=3", 200, 3}, {"n=10000", 200, 10000}, {"n=1&payload_bytes=-1", 400, 0}, {"n=1&payload_bytes=4097", 400, 0}, {"n=1&payload_bytes=invalid", 400, 0}, {"n=1&payload_bytes=4096", 200, 1}} {
+		response, err := client.Get(app.ControlURL + "/operations?" + tc.query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result struct{ Count int }
+		if response.StatusCode == http.StatusOK {
+			err = json.NewDecoder(response.Body).Decode(&result)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != tc.want || err != nil {
+			t.Fatalf("operations %q: status %d, decode %v", tc.query, response.StatusCode, err)
+		}
+		if tc.want == http.StatusOK && result.Count != tc.count {
+			t.Fatalf("operations %q returned %d", tc.query, result.Count)
+		}
+	}
+	for _, tc := range []struct {
+		path string
+		want int
+	}{{"start", 204}, {"start", 409}, {"stop", 204}, {"stop", 204}, {"start", 204}} {
+		response, err := client.Post(app.ControlURL+"/cpu-profile/"+tc.path, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != tc.want {
+			t.Fatalf("CPU %s status %d, want %d", tc.path, response.StatusCode, tc.want)
+		}
+	}
+	app.Signal(t)
+	stats := app.FinalStats(t)
+	if stats.Trace.DroppedSpans != 0 || stats.Trace.FailedExports != 0 || stats.Profiles.Exported != 0 || stats.Profiles.Failed != 0 || stats.Profiles.Skipped != 0 {
+		t.Fatalf("unexpected disabled exporter statistics: %+v", stats)
+	}
 }

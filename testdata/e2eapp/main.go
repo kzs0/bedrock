@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -14,6 +15,8 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/pprof"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -39,6 +42,11 @@ type fixtureConfig struct {
 	SampleRate              *float64
 	ErrorDetails            bool
 	ProfileLabels           bool
+	MetricFamilyLimit       int
+	ProfileTimeoutMillis    int
+	ProfileRetries          int
+	ProfileMaxBytes         int
+	ShutdownMillis          int
 	MetricSeriesLimit       int
 	CPUWindowMillis         int
 	ProfileIntervalMillis   int
@@ -68,6 +76,14 @@ func run() error {
 	if cfg.SampleRate != nil {
 		bc.TraceSampleRate = *cfg.SampleRate
 	}
+	shutdownTimeout := 5 * time.Second
+	if cfg.ShutdownMillis > 0 {
+		shutdownTimeout = time.Duration(cfg.ShutdownMillis) * time.Millisecond
+		bc.ShutdownTimeout = shutdownTimeout
+	}
+	if cfg.MetricFamilyLimit > 0 {
+		bc.MetricFamilyLimit = cfg.MetricFamilyLimit
+	}
 	if cfg.MetricSeriesLimit > 0 {
 		bc.MetricSeriesLimit = cfg.MetricSeriesLimit
 	}
@@ -85,6 +101,11 @@ func run() error {
 			types = append(types, bedrock.ProfileType(typ))
 		}
 		bc.Profiles = &bedrock.ProfileExportConfig{Endpoint: cfg.ProfileEndpoint, AllowHTTP: true, Types: types, Interval: interval, CPUSampleDuration: window, Timeout: 2 * time.Second}
+		if cfg.ProfileTimeoutMillis != 0 {
+			bc.Profiles.Timeout = time.Duration(cfg.ProfileTimeoutMillis) * time.Millisecond
+		}
+		bc.Profiles.Retries = cfg.ProfileRetries
+		bc.Profiles.MaxBytes = cfg.ProfileMaxBytes
 		bc.Profiles.Headers = cfg.ProfileHeaders
 		if cfg.ProfileCAFile != "" {
 			pem, readErr := os.ReadFile(cfg.ProfileCAFile)
@@ -125,7 +146,7 @@ func run() error {
 		for _, typ := range cfg.CloudProfileTypes {
 			types = append(types, bedrock.ProfileType(typ))
 		}
-		bc.ShutdownTimeout = 5 * time.Second
+		bc.ShutdownTimeout = shutdownTimeout
 		ctx, cleanup = bedrock.Init(ctx, bedrock.WithConfig(bc), bedrock.WithStaticAttrs(static...), bedrock.WithCloud(cfg.CloudAPIKey, bedrock.CloudEndpoint(cfg.CloudEndpoint), bedrock.CloudInsecure(), bedrock.CloudPushInterval(push), bedrock.CloudProfileInterval(interval), bedrock.CloudProfileCPUSampleDuration(window), bedrock.CloudProfiles(types...)))
 		b = bedrock.FromContext(ctx)
 	} else {
@@ -135,6 +156,12 @@ func run() error {
 		}
 		ctx = bedrock.WithBedrock(ctx, b)
 	}
+	stats := func() map[string]any {
+		return map[string]any{"trace": b.TraceExportStats(), "profiles": b.ProfileStats(), "metrics": map[string]uint64{"DroppedSeries": b.Metrics().DroppedSeries()}}
+	}
+	defer func() { _ = json.NewEncoder(os.Stderr).Encode(map[string]any{"fixture_final_stats": stats()}) }()
+	var cpu fixtureCPUProfile
+	defer cpu.stop()
 	stop := make(chan struct{})
 	var stopOnce, workOnce sync.Once
 	var work sync.WaitGroup
@@ -187,7 +214,43 @@ func run() error {
 	control.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	control.HandleFunc("/stats", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"trace": b.TraceExportStats(), "profiles": b.ProfileStats(), "metrics": map[string]uint64{"DroppedSeries": b.Metrics().DroppedSeries()}})
+		_ = json.NewEncoder(w).Encode(stats())
+	})
+	control.HandleFunc("POST /cpu-profile/start", func(w http.ResponseWriter, _ *http.Request) {
+		if err := cpu.start(); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	control.HandleFunc("POST /cpu-profile/stop", func(w http.ResponseWriter, _ *http.Request) {
+		cpu.stop()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	control.HandleFunc("/operations", func(w http.ResponseWriter, r *http.Request) {
+		n, parseErr := strconv.Atoi(r.URL.Query().Get("n"))
+		if parseErr != nil || n < 0 || n > 10000 {
+			http.Error(w, "n must be between 0 and 10000", http.StatusBadRequest)
+			return
+		}
+		payloadBytes := 0
+		if value := r.URL.Query().Get("payload_bytes"); value != "" {
+			payloadBytes, parseErr = strconv.Atoi(value)
+			if parseErr != nil || payloadBytes < 0 || payloadBytes > 4096 {
+				http.Error(w, "payload_bytes must be between 0 and 4096", http.StatusBadRequest)
+				return
+			}
+		}
+		payload := strings.Repeat("x", payloadBytes)
+		for range n {
+			op, opctx := bedrock.Operation(ctx, "fixture.operation")
+			if payloadBytes > 0 {
+				op.Register(opctx, attr.String("fixture.payload", payload))
+			}
+			op.Done()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]int{"count": n})
 	})
 	control.HandleFunc("/shutdown", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent); requestStop() })
 	control.HandleFunc("/workload", func(w http.ResponseWriter, _ *http.Request) {
@@ -219,17 +282,61 @@ func run() error {
 	case <-stop:
 	}
 	cancel()
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 	for _, srv := range servers {
 		_ = srv.Shutdown(shutdownCtx)
 	}
 	work.Wait()
+	cpu.stop()
 	if cleanup != nil {
 		cleanup()
 		return nil
 	}
 	return b.Shutdown(shutdownCtx)
+}
+
+type boundedProfileBuffer struct{ bytes.Buffer }
+
+func (b *boundedProfileBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if remaining := (1 << 20) - b.Len(); remaining > 0 {
+		if len(p) > remaining {
+			p = p[:remaining]
+		}
+		_, _ = b.Buffer.Write(p)
+	}
+	return n, nil
+}
+
+type fixtureCPUProfile struct {
+	mu     sync.Mutex
+	active bool
+	buffer boundedProfileBuffer
+}
+
+func (p *fixtureCPUProfile) start() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.active {
+		return errors.New("fixture CPU profiler already active")
+	}
+	p.buffer.Reset()
+	if err := pprof.StartCPUProfile(&p.buffer); err != nil {
+		return err
+	}
+	p.active = true
+	return nil
+}
+
+func (p *fixtureCPUProfile) stop() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.active {
+		pprof.StopCPUProfile()
+		p.active = false
+		p.buffer.Reset()
+	}
 }
 
 var retainedHeap [][]byte
