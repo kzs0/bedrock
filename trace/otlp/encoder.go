@@ -2,6 +2,8 @@ package otlp
 
 import (
 	"encoding/json"
+	"math"
+	"strconv"
 
 	"github.com/kzs0/bedrock/attr"
 	"github.com/kzs0/bedrock/trace"
@@ -213,8 +215,7 @@ func valueToAnyValue(v attr.Value) AnyValue {
 		i := v.AsInt64()
 		return AnyValue{IntValue: &i}
 	case attr.KindUint64:
-		i := int64(v.AsUint64())
-		return AnyValue{IntValue: &i}
+		return valueToAnyValue(unsignedValue(v.AsUint64()))
 	case attr.KindFloat64:
 		f := v.AsFloat64()
 		return AnyValue{DoubleValue: &f}
@@ -231,6 +232,13 @@ func valueToAnyValue(v attr.Value) AnyValue {
 		s := v.String()
 		return AnyValue{StringValue: &s}
 	}
+}
+
+func unsignedValue(value uint64) attr.Value {
+	if value > math.MaxInt64 {
+		return attr.StringValue(strconv.FormatUint(value, 10))
+	}
+	return attr.Int64Value(int64(value))
 }
 
 // stringValue creates an AnyValue from a string.

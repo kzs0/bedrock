@@ -173,7 +173,7 @@ jobs:
   e2e:
     name: Functional E2E (Go ${{ matrix.go-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

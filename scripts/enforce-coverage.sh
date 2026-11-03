@@ -2,7 +2,7 @@
 set -euo pipefail
 
 profile=${1:-coverage.out}
-minimum=${2:-80.0}
+minimum=${2:-90.0}
 
 if [[ ! -s "$profile" ]]; then
   echo "Coverage profile $profile is missing or empty." >&2

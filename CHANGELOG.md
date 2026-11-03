@@ -11,6 +11,7 @@ pre-1.0, minor releases may include intentional API or behavior changes.
 
 - Public-API subprocess E2E tests cover telemetry, profiles, privacy, lifecycle, cloud, gRPC, and TLS behavior.
 - Fault-injection E2E tests verify queue accounting, transport recovery, retry budgets, cancellation, and CPU-profiler ownership.
+- Configuration, public API, HTTP/2 protocol, privacy, profile conversion, and metric exposition contracts enforce separate 90% unit/E2E coverage gates.
 - Separate cross-package unit and linked-library E2E coverage inventories, plus bounded PR and scheduled native fuzzing.
 
 - Independent OTLP HTTP profile exports with native experimental v0.2.0 sample conversion, TLS, type selection, limits, retries and export statistics.
@@ -61,6 +62,8 @@ pre-1.0, minor releases may include intentional API or behavior changes.
 
 ### Fixed
 
+- Preserve explicit attribute overrides in large sets and merges.
+- Preserve large unsigned OTLP attribute values as decimal strings and retain typed zero, false, and empty protobuf values.
 - Preserve repeated zero-valued native profile samples and classify inbound HTTP spans as server spans.
 
 - Bounded batch export concurrency and historical errors; preserved cancellation and drain ordering.

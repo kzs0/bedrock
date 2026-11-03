@@ -91,7 +91,7 @@ jobs:
         id: coverage
         run: |
           set +e
-          ./scripts/enforce-coverage.sh coverage.out 80.0
+          ./scripts/enforce-coverage.sh coverage.out 90.0
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
       - name: Validate E2E report rendering
@@ -216,7 +216,7 @@ jobs:
             const mod = 'github.com/kzs0/bedrock';
             let totalCov = 'N/A';
             const uncoveredByPkg = {}; // pkg → [{ file, func }]
-            const lowCovByPkg   = {}; // pkg → [{ file, func, pct }]  (<80%, >0%)
+            const lowCovByPkg   = {};
 
             try {
               const lines = fs.readFileSync('coverage.txt', 'utf8').trim().split('\n');
@@ -244,7 +244,7 @@ jobs:
                 if (pct === 0) {
                   uncoveredByPkg[pkg] ??= [];
                   uncoveredByPkg[pkg].push({ file, func: fnName });
-                } else if (pct < 80) {
+                } else if (pct < 90) {
                   lowCovByPkg[pkg] ??= [];
                   lowCovByPkg[pkg].push({ file, func: fnName, pct });
                 }
@@ -344,7 +344,7 @@ jobs:
               );
             }
 
-            // ── Low-coverage functions (<80%, >0%) ──────────────────────────
+            // Track functions below the coverage target.
             const lowPkgs = Object.entries(lowCovByPkg)
               .sort(([a], [b]) => a.localeCompare(b));
 

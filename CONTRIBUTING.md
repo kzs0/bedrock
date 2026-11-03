@@ -36,7 +36,7 @@ make ci
 
 Run `gofmt -w <changed-go-files>` and `go mod tidy` first; neither command
 should leave unrelated changes. `make ci` checks formatting, vet, lint, ordinary
-and race-enabled tests, 80% aggregate coverage, the nested `bench` and
+and race-enabled tests, separate 90% unit/E2E coverage gates, the nested `bench` and
 `compat/otlp` modules, and known vulnerabilities across all three modules. Run the aggregate target with Go 1.27
 for CI-equivalent results; the pinned linter requires Go 1.26 or newer, and
 the vulnerability scanner requires at least Go 1.25. CI separately verifies that the library builds and tests at its Go

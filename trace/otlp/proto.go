@@ -1,6 +1,7 @@
 package otlp
 
 import (
+	"encoding/binary"
 	"math"
 
 	"github.com/kzs0/bedrock/attr"
@@ -130,22 +131,31 @@ func (b *protoBuf) appendKV(fieldNumber int, key string, value attr.Value) {
 
 // appendAV writes an AnyValue message at fieldNumber.
 func (b *protoBuf) appendAV(fieldNumber int, v attr.Value) {
+	if v.Kind() == attr.KindUint64 {
+		v = unsignedValue(v.AsUint64())
+	}
 	off := b.beginMsg(fieldNumber)
 	switch v.Kind() {
 	case attr.KindString:
-		b.appendString(1, v.AsString())
+		text := v.AsString()
+		b.appendTag(1, 2)
+		b.appendRawVarint(uint64(len(text)))
+		b.data = append(b.data, text...)
 	case attr.KindBool:
+		b.appendTag(2, 0)
 		if v.AsBool() {
-			b.appendVarintField(2, 1)
+			b.appendRawVarint(1)
+		} else {
+			b.appendRawVarint(0)
 		}
 	case attr.KindInt64:
-		b.appendVarintField(3, uint64(v.AsInt64()))
-	case attr.KindUint64:
-		b.appendVarintField(3, v.AsUint64())
+		b.appendTag(3, 0)
+		b.appendRawVarint(uint64(v.AsInt64()))
 	case attr.KindFloat64:
 		b.appendDouble(4, v.AsFloat64())
 	case attr.KindDuration:
-		b.appendVarintField(3, uint64(v.AsDuration()))
+		b.appendTag(3, 0)
+		b.appendRawVarint(uint64(v.AsDuration()))
 	default:
 		b.appendString(1, v.String())
 	}
@@ -268,10 +278,8 @@ func (b *protoBuf) appendFixed64(fieldNumber int, v uint64) {
 
 // appendDouble encodes a double field (wire type 1): 8 bytes IEEE-754 little-endian.
 func (b *protoBuf) appendDouble(fieldNumber int, v float64) {
-	if v == 0 {
-		return
-	}
-	b.appendFixed64(fieldNumber, math.Float64bits(v))
+	b.appendTag(fieldNumber, 1)
+	b.data = binary.LittleEndian.AppendUint64(b.data, math.Float64bits(v))
 }
 
 // appendBytes encodes a bytes field (wire type 2).

@@ -1343,8 +1343,8 @@ go tool pprof goroutine.prof
 
 Bedrock requires Go 1.24 or newer. CI builds and runs race-enabled tests on Go
 1.24, builds and runs ordinary tests on Go 1.24, 1.26, and 1.27, and separately checks
-80% aggregate coverage, formatting, vet, lint, the nested `bench` module, and
-known vulnerabilities. Required E2E smoke jobs run on Go 1.24.13 and 1.27.3
+separate 90% unit and E2E coverage gates, formatting, vet, lint, the nested `bench`
+module, and known vulnerabilities. Functional E2E jobs run on Go 1.24.13 and 1.27.3
 without Docker or vendor services. Before opening a pull request, run:
 
 ```bash
@@ -1362,6 +1362,7 @@ PR E2E job combines race instrumentation with subprocess coverage; the baseline
 job collects ordinary subprocess coverage.
 `make e2e-coverage` additionally records application subprocess coverage in
 `.coverage-e2e/`, exports `coverage-e2e.out`, and writes a file/function inventory.
+It enforces a separate 90% statement coverage gate.
 CI uploads these counters, the inventory, and diagnostics for 14 days, including
 on failure. E2E shutdown must finish normally to write application counters.
 The E2E percentage covers only library packages linked into the fixture;
@@ -1371,7 +1372,7 @@ then excluded from the exported library profile and percentage denominator.
 
 `make coverage` instruments every root library package, including calls from
 other packages' tests, while excluding runnable examples from both the tests
-and coverage denominator. It retains the 80% statement coverage gate and writes
+and coverage denominator. It enforces a 90% statement coverage gate and writes
 `coverage-inventory.md`, listing every library source file, every reported
 function, and zero-coverage functions. Files with no executable statements are
 shown separately from executable files missing instrumentation. E2E coverage

@@ -23,6 +23,9 @@ import (
 )
 
 type fixtureConfig struct {
+	Scenario                string
+	ScenarioConfig          json.RawMessage
+	Environment             map[string]string
 	TraceEndpoint           string
 	TraceProtocol           string
 	TraceInsecure           bool
@@ -400,8 +403,8 @@ func (r *receiver) SetHandler(handler func(http.ResponseWriter, *http.Request)) 
 }
 
 func TestFixtureControlBoundaries(t *testing.T) {
-	app := startApp(t, fixtureConfig{ShutdownMillis: 500})
-	client := &http.Client{Timeout: 2 * time.Second}
+	app := startApp(t, fixtureConfig{})
+	client := &http.Client{Timeout: 15 * time.Second}
 	for _, tc := range []struct {
 		query string
 		want  int

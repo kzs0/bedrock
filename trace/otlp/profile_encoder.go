@@ -457,6 +457,9 @@ func appendProfileValue(b *protoBuf, field int, value any, depth int, budget *pr
 		b.endMsg(off)
 	default:
 		primitive := attr.AnyValue(value)
+		if primitive.Kind() == attr.KindUint64 {
+			primitive = unsignedValue(primitive.AsUint64())
+		}
 		off := b.beginMsg(field)
 		switch primitive.Kind() {
 		case attr.KindString:
@@ -470,9 +473,6 @@ func appendProfileValue(b *protoBuf, field int, value any, depth int, budget *pr
 		case attr.KindInt64:
 			b.appendTag(3, 0)
 			b.appendRawVarint(uint64(primitive.AsInt64()))
-		case attr.KindUint64:
-			b.appendTag(3, 0)
-			b.appendRawVarint(primitive.AsUint64())
 		case attr.KindBool:
 			b.appendTag(2, 0)
 			if primitive.AsBool() {

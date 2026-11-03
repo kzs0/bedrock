@@ -28,6 +28,9 @@ import (
 )
 
 type fixtureConfig struct {
+	Scenario                string
+	ScenarioConfig          json.RawMessage
+	Environment             map[string]string
 	TraceEndpoint           string
 	TraceProtocol           string
 	TraceInsecure           bool
@@ -65,6 +68,17 @@ func run() error {
 	var cfg fixtureConfig
 	if err := json.Unmarshal([]byte(os.Getenv("BEDROCK_E2E_CONFIG")), &cfg); err != nil {
 		return err
+	}
+	for key, value := range cfg.Environment {
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+	if cfg.Scenario != "" {
+		if scenario := fixtureScenarios[cfg.Scenario]; scenario != nil {
+			return scenario(cfg)
+		}
+		return errors.New("unknown fixture scenario")
 	}
 	bc := bedrock.DefaultConfig()
 	bc.Service = "bedrock-e2e"
