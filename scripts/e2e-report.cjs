@@ -30,7 +30,7 @@ function renderE2EReport({ log = '', coverage = '', exitCode, runUrl, goVersion 
   const lines = [
     passed ? '<details>' : '<details open>',
     `<summary>E2E scenarios · ${result}${skippedCount ? ` · ${skippedCount} skipped` : ''}</summary>`, '',
-    `${version} · real application processes and HTTP/gRPC receivers.`, '',
+    `Coverage run: ${version} · real application processes and HTTP/gRPC receivers.`, '',
     '| Scenario | Result | Duration |', '|---|---|---:|',
     ...(rows.length ? rows : ['| Results unavailable | incomplete | — |']), '',
     '</details>',
