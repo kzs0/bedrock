@@ -6,7 +6,7 @@ services:
       dockerfile: example/fullstack/Dockerfile
     ports:
       - "8080:8080" # Application HTTP
-      - "9090:9090" # Observability endpoint (metrics, pprof)
+      - "9090:9090" # Metrics and health endpoints
     environment:
       - SERVICE_NAME=bedrock-demo
       - LOG_LEVEL=info
@@ -15,9 +15,9 @@ services:
       - TRACE_SAMPLE_RATE=1.0
       - CANONICAL_LOG=true
       - LOOP_TERM=5s
-      # Opt in to cross-container access and profiling; library defaults are loopback-only with pprof disabled.
+      # Metrics access across the container network.
       - BEDROCK_SERVER_ADDR=0.0.0.0:9090
-      - BEDROCK_SERVER_PPROF=true
+      - BEDROCK_SERVER_PPROF=false
     depends_on:
       jaeger:
         condition: service_started

@@ -158,6 +158,7 @@ func TestMetricsEndpoint_Disabled(t *testing.T) {
 func TestPprofEndpoint_Enabled(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.EnablePprof = true
+	cfg.ProfileHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	srv := newTestServer(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
@@ -229,7 +230,10 @@ func TestServe_And_Shutdown(t *testing.T) {
 
 	// Server goroutine should have exited
 	select {
-	case <-done:
+	case err := <-done:
+		if err != http.ErrServerClosed {
+			t.Errorf("Serve: got %v, want %v", err, http.ErrServerClosed)
+		}
 	case <-time.After(2 * time.Second):
 		t.Error("server did not stop after Shutdown")
 	}

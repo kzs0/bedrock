@@ -32,10 +32,10 @@ jobs:
         run: |
           set +e
           : > test-diagnostics.txt
-          package_output=$(go list ./... 2>&1)
+          package_output=$(go list ./... 2>test-diagnostics.txt)
           list_status=$?
           if (( list_status != 0 )); then
-            printf '%s\n' "$package_output" > test-diagnostics.txt
+            printf '%s\n' "$package_output" >> test-diagnostics.txt
             cat test-diagnostics.txt >&2
             : > test-results.json
             echo "exit_code=$list_status" >> "$GITHUB_OUTPUT"
@@ -56,7 +56,9 @@ jobs:
             exit 0
           fi
 
+          coverpkg=$(IFS=,; echo "${packages[*]}")
           go test -json -count=1 \
+            -coverpkg="$coverpkg" \
             -coverprofile=coverage.out \
             -covermode=atomic \
             "${packages[@]}" > test-results.json 2>&1
@@ -67,12 +69,56 @@ jobs:
       - name: Generate coverage summary
         run: go tool cover -func=coverage.out > coverage.txt 2>/dev/null || touch coverage.txt
 
+      - name: Generate coverage inventory
+        if: always()
+        continue-on-error: true
+        run: python3 scripts/coverage-inventory.py coverage.out > coverage-inventory.md
+
+      - name: Upload coverage inventory
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unit-coverage
+          retention-days: 14
+          path: |
+            coverage.out
+            coverage.txt
+            coverage-inventory.md
+            test-results.json
+            test-diagnostics.txt
+
       - name: Check aggregate coverage
         id: coverage
         run: |
           set +e
-          ./scripts/enforce-coverage.sh coverage.out 80.0
+          ./scripts/enforce-coverage.sh coverage.out 90.0
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Validate E2E report rendering
+        run: node --test scripts/e2e-report.test.cjs
+
+      - name: Run functional E2E report
+        id: e2e
+        run: |
+          set +e
+          make e2e-coverage E2E_TEST_FLAGS=-json > e2e-diagnostics.txt 2>&1
+          status=$?
+          cat e2e-diagnostics.txt
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          echo "go_version=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+          go tool cover -func=coverage-e2e.out > coverage-e2e.txt 2>/dev/null || touch coverage-e2e.txt
+
+      - name: Upload E2E report artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: e2e-report-coverage
+          retention-days: 14
+          path: |
+            e2e-diagnostics.txt
+            coverage-e2e.out
+            coverage-e2e.txt
+            coverage-e2e-inventory.md
 
       # Parse test-results.json (NDJSON from go test -json), build a markdown
       # summary, and post it as a PR comment — updating any previous one.
@@ -84,6 +130,8 @@ jobs:
         env:
           TEST_EXIT_CODE: ${{ steps.tests.outputs.exit_code }}
           COVERAGE_EXIT_CODE: ${{ steps.coverage.outputs.exit_code }}
+          E2E_EXIT_CODE: ${{ steps.e2e.outputs.exit_code }}
+          E2E_GO_VERSION: ${{ steps.e2e.outputs.go_version }}
         with:
           script: |
             const fs = require('fs');
@@ -153,13 +201,22 @@ jobs:
             }
             const testExit = Number.parseInt(process.env.TEST_EXIT_CODE ?? '1', 10);
             const coverageExit = Number.parseInt(process.env.COVERAGE_EXIT_CODE ?? '1', 10);
-            const anyFailed = testExit !== 0 || coverageExit !== 0;
+            const { renderE2EReport } = require('./scripts/e2e-report.cjs');
+            const readReport = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+            const e2eReport = renderE2EReport({
+              log: readReport('e2e-diagnostics.txt'),
+              coverage: readReport('coverage-e2e.txt'),
+              exitCode: process.env.E2E_EXIT_CODE,
+              goVersion: process.env.E2E_GO_VERSION,
+              runUrl: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
+            const anyFailed = testExit !== 0 || coverageExit !== 0 || !e2eReport.passed;
 
             // ── Parse function-level coverage (go tool cover -func output) ──
             const mod = 'github.com/kzs0/bedrock';
             let totalCov = 'N/A';
             const uncoveredByPkg = {}; // pkg → [{ file, func }]
-            const lowCovByPkg   = {}; // pkg → [{ file, func, pct }]  (<80%, >0%)
+            const lowCovByPkg   = {};
 
             try {
               const lines = fs.readFileSync('coverage.txt', 'utf8').trim().split('\n');
@@ -187,7 +244,7 @@ jobs:
                 if (pct === 0) {
                   uncoveredByPkg[pkg] ??= [];
                   uncoveredByPkg[pkg].push({ file, func: fnName });
-                } else if (pct < 80) {
+                } else if (pct < 90) {
                   lowCovByPkg[pkg] ??= [];
                   lowCovByPkg[pkg].push({ file, func: fnName, pct });
                 }
@@ -208,7 +265,7 @@ jobs:
               });
 
             const table = [
-              '| Package | | Tests | ✅ Pass | ❌ Fail | ⏭ Skip | Duration | Coverage |',
+              '| Package | | Tests | ✅ Pass | ❌ Fail | ⏭ Skip | Duration | Library coverage exercised |',
               '|---------|:-:|------:|-------:|-------:|-------:|---------:|---------|',
               ...tableRows,
             ].join('\n');
@@ -229,24 +286,20 @@ jobs:
             });
 
             // ── Compose body ────────────────────────────────────────────────
-            const headline  = anyFailed ? '## ❌ Tests or Coverage Failed' : '## ✅ Tests and Coverage Passed';
-            const summary   = [
-              `**${totalPass + totalFail + totalSkip}** tests run`,
-              `**${totalPass}** passed`,
-              `**${totalFail}** failed`,
-              `**${totalSkip}** skipped`,
-              `coverage **${totalCov}**`,
-            ].join(' · ');
-
+            const headline = anyFailed ? '### Tests need attention' : '### All tests passed';
+            const unitResult = `${totalPass} passed${totalFail ? ` · ${totalFail} failed` : ''}${totalSkip ? ` · ${totalSkip} skipped` : ''}`;
+            const e2eResult = e2eReport.passed ? `${e2eReport.passedCount} scenarios passed` : 'Failed or incomplete';
             const parts = [
-              '<!-- bedrock-test-report -->',
-              headline,
-              '',
-              summary,
-              '',
-              '### Package Results',
-              '',
-              table,
+              '<!-- bedrock-test-report -->', headline, '',
+              '| Suite | Result | Coverage |', '|---|---|---:|',
+              `| Unit | ${unitResult} | ${totalCov} |`,
+              `| E2E | ${e2eResult} | ${e2eReport.coverage} |`, '',
+              '<sub>Unit: all core packages. E2E: linked library code, excluding fixtures. These percentages are separate.</sub>', '',
+              `[E2E matrix: Go 1.24.13 · Go 1.27.3 + race](https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${context.issue.number}/checks). Coverage run: ${e2eReport.version}.`, '',
+              `[Logs & coverage inventories](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`, '',
+              e2eReport.markdown, '',
+              testExit !== 0 || coverageExit !== 0 ? '<details open>' : '<details>',
+              '<summary>Unit test details</summary>', '', table,
             ];
 
             if (failSections.length > 0) {
@@ -282,7 +335,7 @@ jobs:
               parts.push(
                 '',
                 '<details>',
-                `<summary>🔴 ${rows.length} uncovered functions (0%) — click to expand</summary>`,
+                `<summary>${rows.length} functions not covered by unit tests</summary>`,
                 '',
                 '| Package | File | Function |',
                 '|---------|------|----------|',
@@ -291,7 +344,7 @@ jobs:
               );
             }
 
-            // ── Low-coverage functions (<80%, >0%) ──────────────────────────
+            // Track functions below the coverage target.
             const lowPkgs = Object.entries(lowCovByPkg)
               .sort(([a], [b]) => a.localeCompare(b));
 
@@ -306,7 +359,7 @@ jobs:
               parts.push(
                 '',
                 '<details>',
-                `<summary>🟡 ${rows.length} partially covered functions (&lt;80%) — click to expand</summary>`,
+                `<summary>${rows.length} functions with partial unit coverage</summary>`,
                 '',
                 '| Package | File | Function | Coverage |',
                 '|---------|------|----------|---------|',
@@ -315,7 +368,7 @@ jobs:
               );
             }
 
-            parts.push('', `<sub>Commit ${context.sha.slice(0, 7)} · ${new Date().toUTCString()}</sub>`);
+            parts.push('', '</details>', '', `<sub>Updated for ${context.sha.slice(0, 7)}</sub>`);
             const body = parts.join('\n');
 
             // ── Post or update comment ──────────────────────────────────────
@@ -345,7 +398,7 @@ jobs:
 
       # Fail the workflow after the comment is posted so the PR is blocked.
       - name: Enforce test pass
-        if: steps.tests.outputs.exit_code != '0' || steps.coverage.outputs.exit_code != '0'
+        if: steps.tests.outputs.exit_code != '0' || steps.coverage.outputs.exit_code != '0' || steps.e2e.outputs.exit_code != '0'
         run: |
-          echo "Tests or aggregate coverage failed — see the PR comment for details."
+          echo "Tests, coverage, or E2E failed — see the PR comment for details."
           exit 1

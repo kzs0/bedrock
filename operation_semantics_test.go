@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/kzs0/bedrock/privacy"
 	"github.com/kzs0/bedrock/trace"
 )
 
@@ -19,7 +20,7 @@ var _ operationDoneInterface = (*Op)(nil)
 var _ func(*Op) = (*Op).Done
 
 func TestOperationFailureOptionSetsOutcomeSpanAndMetrics(t *testing.T) {
-	ctx, cleanup := Init(context.Background(), WithConfig(Config{Service: "test"}))
+	ctx, cleanup := Init(context.Background(), WithConfig(Config{Service: "test", TraceSampleRate: 1, DataPolicy: &privacy.Policy{AllowErrorDetails: true}}))
 	defer cleanup()
 
 	wantErr := errors.New("creation failed")
@@ -44,7 +45,7 @@ func TestOperationFailureOptionSetsOutcomeSpanAndMetrics(t *testing.T) {
 }
 
 func TestOperationEndFailureOverridesDefault(t *testing.T) {
-	ctx, cleanup := Init(context.Background(), WithConfig(Config{Service: "test"}))
+	ctx, cleanup := Init(context.Background(), WithConfig(Config{Service: "test", TraceSampleRate: 1, DataPolicy: &privacy.Policy{AllowErrorDetails: true}}))
 	defer cleanup()
 
 	wantErr := errors.New("completion failed")
@@ -69,7 +70,7 @@ func TestOperationEndFailureOverridesDefault(t *testing.T) {
 }
 
 func TestOperationEndSuccessOverridesFailure(t *testing.T) {
-	ctx, cleanup := Init(context.Background(), WithConfig(Config{Service: "test"}))
+	ctx, cleanup := Init(context.Background(), WithConfig(Config{Service: "test", TraceSampleRate: 1, DataPolicy: &privacy.Policy{AllowErrorDetails: true}}))
 	defer cleanup()
 
 	op, opCtx := Operation(ctx, "end.success", Failure(errors.New("recovered")))

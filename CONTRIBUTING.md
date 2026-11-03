@@ -15,7 +15,7 @@ keep unrelated changes in separate pull requests.
 
 ## Make a change
 
-- Preserve the context-based, dependency-light design and controlled metric
+- Preserve the context-based, third-party-free core design and controlled metric
   cardinality.
 - Add focused tests for success, failure, boundary, cancellation, and
   concurrency behavior where relevant.
@@ -23,7 +23,8 @@ keep unrelated changes in separate pull requests.
   tests with the race detector.
 - Update public documentation and the `Unreleased` section of
   [CHANGELOG.md](CHANGELOG.md) when behavior, configuration, or API changes.
-- Do not add or update dependencies unless the change requires it and the pull
+- The core module must have zero third-party dependencies. Keep external tooling in isolated modules.
+- Do not add or update isolated-module dependencies unless the change requires it and the pull
   request explains the tradeoff.
 
 Format and validate the repository before submitting:
@@ -35,16 +36,16 @@ make ci
 
 Run `gofmt -w <changed-go-files>` and `go mod tidy` first; neither command
 should leave unrelated changes. `make ci` checks formatting, vet, lint, ordinary
-and race-enabled tests, 80% aggregate coverage, the nested `bench` module, and
-known vulnerabilities in both modules. Run the aggregate target with Go 1.26
-for CI-equivalent results; the pinned vulnerability scanner requires at least
-Go 1.25. CI separately verifies that the library builds and tests at its Go
+and race-enabled tests, separate 90% unit/E2E coverage gates, the nested `bench` and
+`compat/otlp` modules, and known vulnerabilities across all three modules. Run the aggregate target with Go 1.27
+for CI-equivalent results; the pinned linter requires Go 1.26 or newer, and
+the vulnerability scanner requires at least Go 1.25. CI separately verifies that the library builds and tests at its Go
 1.24 baseline.
 
-GitHub Actions builds and tests on Go 1.24 and 1.26. Separate Go 1.24 jobs run
+GitHub Actions builds and tests on Go 1.24, 1.26, and 1.27. Separate Go 1.24 jobs run
 the race detector, coverage gate, formatting, vet, lint, and `bench` module
 tests; vulnerability scanning and tagged-release verification run on the
-current patched Go 1.26 toolchain.
+current patched Go 1.27 toolchain.
 
 ## Compatibility
 

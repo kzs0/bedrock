@@ -179,7 +179,7 @@ func TestOp_Event_NoSpan(t *testing.T) {
 
 func TestOpStep_Event(t *testing.T) {
 	ctx, close := Init(context.Background(),
-		WithConfig(Config{Service: "test"}),
+		WithConfig(Config{Service: "test", TraceSampleRate: 1}),
 	)
 	defer close()
 

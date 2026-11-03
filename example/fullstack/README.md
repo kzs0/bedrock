@@ -1,11 +1,10 @@
-# Bedrock Full-Stack Observability Example
+# Full-stack example
 
-This example demonstrates a complete observability stack using Bedrock with industry-standard open-source tools.
+The app exposes metrics and health checks across the Compose network. Profiling HTTP routes remain disabled. The legacy Pyroscope scraping configuration does not activate profiling handlers.
 
-The Compose configuration explicitly sets `BEDROCK_SERVER_ADDR=0.0.0.0:9090`
-and `BEDROCK_SERVER_PPROF=true` so Prometheus and Pyroscope can reach the app
-inside the isolated container network. Bedrock itself defaults to a loopback-only
-listener with pprof disabled.
+To export profiles, set `BEDROCK_PROFILE_ENDPOINT` to an OTLP HTTP `/v1/profiles` endpoint supporting experimental profiles v0.2.0. Set `BEDROCK_PROFILE_ALLOW_HTTP=true` only for a trusted local plaintext collector. The Compose stack does not claim receiver compatibility; choose and configure a receiver supporting this pinned schema. The root README documents authentication, TLS, privacy and profile selection.
+
+Prometheus, Loki, and Grafana remain available for metrics/logging. Optional HTTP pprof debugging requires code-level handler injection and application authentication; an environment flag alone does not expose it.
 
 ## Stack Overview
 
@@ -88,7 +87,7 @@ curl http://localhost:8080/users
 | **Jaeger UI** | http://localhost:16686 | Distributed trace visualization |
 | **Pyroscope** | http://localhost:4040 | Continuous profiling data |
 | **App Metrics** | http://localhost:9090/metrics | Raw Prometheus metrics |
-| **App Pprof** | http://localhost:9090/debug/pprof/ | Go profiling endpoints |
+| **App Pprof** | Disabled | Requires explicit debug integration |
 
 ## Just Commands
 
@@ -196,7 +195,7 @@ When `CANONICAL_LOG=true`, Bedrock emits structured logs on operation completion
 
 ### Profiling in Grafana
 
-Pyroscope automatically scrapes profiles from the app's pprof endpoints every 15 seconds.
+The legacy Pyroscope scrape configuration is inactive until explicit debug handlers are installed. Prefer OTLP profile export to a compatible receiver.
 
 **To view profiles in Grafana**:
 1. Go to **Explore** in Grafana
@@ -215,7 +214,7 @@ Pyroscope automatically scrapes profiles from the app's pprof endpoints every 15
 - **Mutex**: Lock contention
 - **Block**: Blocking operations (I/O, channel ops, etc.)
 
-**Manual profiling (alternative)**:
+**Optional manual debugging (requires explicit handlers)**:
 ```bash
 # Capture a 30-second CPU profile
 curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30

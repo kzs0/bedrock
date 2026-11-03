@@ -25,6 +25,7 @@ type cloudConfig struct {
 	pushInterval        time.Duration
 	profileInterval     time.Duration
 	profileCPUSampleDur time.Duration
+	profileTypes        []ProfileType
 }
 
 // CloudOption configures the cloud backend connection.
@@ -90,6 +91,9 @@ func WithCloud(apiKey string, opts ...CloudOption) InitOption {
 		if cc.profileInterval <= 0 {
 			cc.profileInterval = defaultProfileInterval
 		}
+		if cc.profileCPUSampleDur <= 0 || cc.profileCPUSampleDur >= cc.profileInterval {
+			panic("bedrock: invalid CPU profile window")
+		}
 		c.cloudCfg = cc
 	}
 }
@@ -146,7 +150,14 @@ func wireCloudWithTraceExporter(
 
 	// Start background workers.
 	stopMetrics := startMetricsPush(b.metrics, logger, *cc)
-	stopProfiles := startProfilePush(b.config.Service, b.staticAttr, logger, *cc)
+	profileCfg := ProfileExportConfig{Endpoint: strings.TrimRight(cc.endpoint, "/") + "/v1/profiles", Headers: map[string]string{"Authorization": "Bearer " + cc.apiKey}, AllowHTTP: cc.insecure, Interval: cc.profileInterval, CPUSampleDuration: cc.profileCPUSampleDur, Types: cc.profileTypes}
+	stopProfiles, profileErr := b.StartProfileExport(profileCfg)
+	if profileErr != nil {
+		stopProfiles = func(context.Context) {}
+		if logger != nil {
+			logger.Warn("profile export disabled", "error", profileErr)
+		}
+	}
 
 	return func(ctx context.Context) {
 		stopCloudWorkers(ctx, stopMetrics, stopProfiles)
@@ -260,4 +271,10 @@ func (f *fanOutExporter) Shutdown(ctx context.Context) error {
 		}
 	}
 	return firstErr
+}
+
+// CloudProfiles selects exported profile types.
+// An empty selection disables cloud profiling.
+func CloudProfiles(types ...ProfileType) CloudOption {
+	return func(c *cloudConfig) { c.profileTypes = append([]ProfileType{}, types...) }
 }

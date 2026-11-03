@@ -125,7 +125,10 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 
 	// Auto-detect environment attributes. User-supplied WithStaticAttrs values
 	// take precedence because they are appended last (attr.NewSet last-wins).
-	detected := detectEnvironment()
+	var detected []attr.Attr
+	if !cfg.config.DisableEnvironmentDetection {
+		detected = detectEnvironment()
+	}
 	allStatic := append(detected, cfg.staticAttrs...)
 
 	b, err := New(*cfg.config, allStatic...)
@@ -159,7 +162,7 @@ func Init(ctx context.Context, opts ...InitOption) (context.Context, func()) {
 	}
 
 	cleanup := func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.config.ShutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), b.config.ShutdownTimeout)
 		defer cancel()
 
 		// Shutdown obs server first if it exists
@@ -236,7 +239,15 @@ func Operation(ctx context.Context, name string, opts ...OperationOption) (*Op, 
 		}
 		// StartSpan avoids closure allocations: parent and remote parent are
 		// direct parameters; attrs are synced to span at Done() via SetAttrSet.
-		newCtx, span = b.tracer.StartSpan(ctx, cfg.name, parentSpan, cfg.remoteParent, cfg.attrs)
+		if cfg.spanKind == trace.SpanKindInternal {
+			newCtx, span = b.tracer.StartSpan(ctx, cfg.name, parentSpan, cfg.remoteParent, cfg.attrs)
+		} else {
+			spanOpts := []trace.StartSpanOption{trace.WithSpanKind(cfg.spanKind), trace.WithParent(parentSpan)}
+			if cfg.remoteParent != nil {
+				spanOpts = append(spanOpts, trace.WithRemoteParent(*cfg.remoteParent))
+			}
+			newCtx, span = b.tracer.Start(ctx, cfg.name, spanOpts...)
+		}
 	}
 
 	// Create operation state

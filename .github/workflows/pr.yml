@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         # Preserve the Go 1.24 baseline and test the current Go toolchain.
-        go-version: ["1.24.13", "1.26.6"]
+        go-version: ["1.24.13", "1.26.10", "1.27.3"]
 
     steps:
       - name: Check out code
@@ -71,7 +71,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.12.2
+          version: v2.15.0
           args: --timeout=5m
 
   race:
@@ -130,7 +130,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [".", "bench"]
+        module: [".", "bench", "compat/otlp"]
 
     steps:
       - name: Check out code
@@ -143,7 +143,7 @@ jobs:
         with:
           # Scan with the current patched toolchain; compatibility with the
           # library's Go 1.24 baseline is tested in separate jobs above.
-          go-version: "1.26.6"
+          go-version: "1.27.3"
           cache: true
 
       - name: Install govulncheck
@@ -152,3 +152,94 @@ jobs:
       - name: Run govulncheck
         working-directory: ${{ matrix.module }}
         run: govulncheck ./...
+
+  otlp-compatibility:
+    name: OTLP Profiles Compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: "1.27.3"
+          cache-dependency-path: compat/otlp/go.sum
+      - name: Verify profile compatibility
+        working-directory: compat/otlp
+        run: |
+          go mod tidy -diff
+          go mod verify
+          go test -race -count=1 ./...
+          go vet ./...
+
+  e2e:
+    name: Functional E2E (Go ${{ matrix.go-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - go-version: "1.24.13"
+            race: "0"
+            test-flags: ""
+          - go-version: "1.27.3"
+            race: "1"
+            test-flags: "-race"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache-dependency-path: compat/otlp/go.sum
+      - name: Run instrumented functional E2E
+        env:
+          E2E_RACE: ${{ matrix.race }}
+          E2E_TEST_FLAGS: ${{ matrix.test-flags }}
+        run: |
+          set -o pipefail
+          make e2e-coverage 2>&1 | tee e2e-diagnostics.txt
+      - name: Summarize E2E coverage
+        if: success()
+        run: |
+          go tool cover -func=coverage-e2e.out >> "$GITHUB_STEP_SUMMARY"
+          echo 'E2E coverage is separate from the unit coverage gate.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload E2E diagnostics and coverage
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: e2e-go-${{ matrix.go-version }}
+          include-hidden-files: true
+          retention-days: 14
+          path: |
+            e2e-diagnostics.txt
+            coverage-e2e.out
+            coverage-e2e-inventory.md
+            .coverage-e2e/
+
+  fuzz-smoke:
+    name: Native fuzz smoke (Go 1.27)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: "1.27.3"
+          cache: true
+      - name: Run bounded native fuzzing
+        run: |
+          set -o pipefail
+          make fuzz-smoke 2>&1 | tee fuzz-smoke.log
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fuzz-smoke-failure
+          retention-days: 14
+          path: |
+            fuzz-smoke.log
+            internal/pprof/testdata/fuzz/
+            privacy/testdata/fuzz/

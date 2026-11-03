@@ -12,7 +12,6 @@ import (
 
 	"github.com/kzs0/bedrock/metric"
 	"github.com/kzs0/bedrock/metric/prometheus"
-	"github.com/kzs0/bedrock/profile"
 )
 
 const defaultAddr = "127.0.0.1:9090"
@@ -34,6 +33,8 @@ type Config struct {
 	EnableMetrics bool
 	// EnablePprof enables the /debug/pprof endpoints.
 	EnablePprof bool
+	// ProfileHandler explicitly supplies debug endpoints.
+	ProfileHandler http.Handler
 
 	// HTTP Protection Settings
 
@@ -107,8 +108,8 @@ func New(metrics *metric.Registry, cfg Config) *Server {
 		mux.Handle("/metrics", prometheus.Handler(metrics))
 	}
 
-	if cfg.EnablePprof {
-		profile.RegisterHandlers(mux)
+	if cfg.EnablePprof && cfg.ProfileHandler != nil {
+		mux.Handle("/debug/pprof/", cfg.ProfileHandler)
 	}
 
 	// Health check endpoint

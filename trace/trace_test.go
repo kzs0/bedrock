@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kzs0/bedrock/attr"
+	"github.com/kzs0/bedrock/privacy"
 )
 
 func TestTracerStartSpan(t *testing.T) {
@@ -106,7 +107,7 @@ func TestSpanEvents(t *testing.T) {
 }
 
 func TestSpanRecordError(t *testing.T) {
-	tracer := NewTracer(TracerConfig{})
+	tracer := NewTracer(TracerConfig{DataPolicy: &privacy.Policy{AllowErrorDetails: true}})
 
 	_, span := tracer.Start(context.Background(), "test")
 
@@ -260,7 +261,7 @@ func TestSetAttrSet_IgnoredAfterEnd(t *testing.T) {
 }
 
 func TestSetStatus_OK(t *testing.T) {
-	tracer := NewTracer(TracerConfig{})
+	tracer := NewTracer(TracerConfig{DataPolicy: &privacy.Policy{AllowErrorDetails: true}})
 	_, span := tracer.Start(context.Background(), "test")
 	defer span.End()
 
@@ -275,7 +276,7 @@ func TestSetStatus_OK(t *testing.T) {
 }
 
 func TestSetStatus_Error(t *testing.T) {
-	tracer := NewTracer(TracerConfig{})
+	tracer := NewTracer(TracerConfig{DataPolicy: &privacy.Policy{AllowErrorDetails: true}})
 	_, span := tracer.Start(context.Background(), "test")
 	defer span.End()
 

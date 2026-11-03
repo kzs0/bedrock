@@ -312,7 +312,7 @@ func TestWireCloudLeavesTraceShutdownToBedrock(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b, err := New(Config{Service: "test"})
+	b, err := New(Config{Service: "test", TraceSampleRate: 1})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestWireCloudBuildsTraceExporter(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b, err := New(Config{Service: "test"})
+	b, err := New(Config{Service: "test", TraceSampleRate: 1})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

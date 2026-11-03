@@ -245,7 +245,7 @@ func (op *operationState) end(opts ...EndOption) {
 		// a Merge allocation on every Register call during the operation lifetime.
 		if op.span != nil {
 			op.mu.Lock()
-			finalAttrs := op.attrs
+			finalAttrs := op.bedrock.policy.Apply(op.attrs)
 			op.mu.Unlock()
 			op.span.SetAttrSet(finalAttrs)
 			op.span.End()

@@ -45,8 +45,9 @@ type Span struct {
 	statusMsg  string
 	tracestate string // W3C tracestate for propagation
 
-	tracer *Tracer
-	ended  bool
+	tracer  *Tracer
+	sampled bool
+	ended   bool
 }
 
 // Event represents an event within a span.
@@ -124,6 +125,9 @@ func (s *Span) SetAttr(attrs ...attr.Attr) {
 	if s.ended {
 		return
 	}
+	if s.tracer != nil {
+		attrs = s.tracer.policy.Apply(attr.NewSet(attrs...)).Attrs()
+	}
 	s.attrs = s.attrs.Merge(attrs...)
 }
 
@@ -136,6 +140,9 @@ func (s *Span) SetAttrSet(set attr.Set) {
 
 	if s.ended {
 		return
+	}
+	if s.tracer != nil {
+		set = s.tracer.policy.Apply(set)
 	}
 	s.attrs = set
 }
@@ -151,7 +158,7 @@ func (s *Span) AddEvent(name string, attrs ...attr.Attr) {
 	s.events = append(s.events, Event{
 		Name:  name,
 		Time:  time.Now(),
-		Attrs: attr.NewSet(attrs...),
+		Attrs: s.filterAttrs(attr.NewSet(attrs...)),
 	})
 }
 
@@ -176,11 +183,11 @@ func (s *Span) RecordError(err error, attrs ...attr.Attr) {
 	s.events = append(s.events, Event{
 		Name:  "exception",
 		Time:  time.Now(),
-		Attrs: attr.NewSet(errAttrs...),
+		Attrs: s.filterAttrs(attr.NewSet(errAttrs...)),
 	})
 
 	s.status = StatusError
-	s.statusMsg = err.Error()
+	s.statusMsg = s.filterMessage(err.Error())
 }
 
 // SetStatus sets the span status.
@@ -192,7 +199,7 @@ func (s *Span) SetStatus(status SpanStatus, msg string) {
 		return
 	}
 	s.status = status
-	s.statusMsg = msg
+	s.statusMsg = s.filterMessage(msg)
 }
 
 // End finishes the span and exports it.
@@ -226,4 +233,25 @@ func (s *Span) Duration() time.Duration {
 		return time.Since(s.startTime)
 	}
 	return s.endTime.Sub(s.startTime)
+}
+
+func (s *Span) filterAttrs(set attr.Set) attr.Set {
+	if s.tracer != nil {
+		return s.tracer.policy.Apply(set)
+	}
+	return set
+}
+func (s *Span) filterMessage(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	if s.tracer == nil {
+		return msg
+	}
+	clean, keep := s.tracer.policy.Value("exception.message", msg)
+	if !keep {
+		return ""
+	}
+	value, _ := clean.(string)
+	return value
 }

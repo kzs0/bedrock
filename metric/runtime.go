@@ -99,7 +99,8 @@ func (rc *RuntimeCollector) Collect() {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
-	rc.threads.With(rc.staticLabels...).Set(float64(memStats.NumGC)) // NumGC as proxy, see below for threads
+	threads, _ := runtime.ThreadCreateProfile(nil)
+	rc.threads.With(rc.staticLabels...).Set(float64(threads))
 	rc.heapAllocBytes.With(rc.staticLabels...).Set(float64(memStats.HeapAlloc))
 	rc.heapIdleBytes.With(rc.staticLabels...).Set(float64(memStats.HeapIdle))
 	rc.heapInuseBytes.With(rc.staticLabels...).Set(float64(memStats.HeapInuse))

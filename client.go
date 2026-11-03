@@ -25,7 +25,7 @@ func (t *instrumentedTransport) RoundTrip(req *http.Request) (*http.Response, er
 		Base: t.base,
 	}
 
-	if b != nil && !b.IsNoop() {
+	if b != nil && !b.IsNoop() && !isNoTrace(ctx) {
 		tr.Tracer = b.Tracer()
 	}
 
@@ -78,7 +78,7 @@ func Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	// Create instrumented transport
 	tr := &transport.Transport{}
 
-	if b != nil && !b.IsNoop() {
+	if b != nil && !b.IsNoop() && !isNoTrace(ctx) {
 		tr.Tracer = b.Tracer()
 	}
 

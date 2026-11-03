@@ -2,6 +2,41 @@
 
 An opinionated observability library for Go that provides tracing, metrics, profiling, and structured logging with automatic instrumentation.
 
+## Instrumentation safety and OTLP profiles
+
+The core library has zero third-party dependencies. External compatibility and benchmark tooling lives in isolated Go modules.
+
+Profiles are exported to a configured OTLP HTTP collector. Importing the core package registers no pprof routes. A cloud account and an HTTP observability server are unnecessary:
+
+```go
+cfg := bedrock.DefaultConfig()
+cfg.ServerEnabled = false
+cfg.Profiles = &bedrock.ProfileExportConfig{
+    Endpoint: "https://collector.example/v1/profiles",
+    Headers: map[string]string{"Authorization": "Bearer " + token},
+    Types: []bedrock.ProfileType{bedrock.ProfileTypeCPU, bedrock.ProfileTypeHeap},
+    Interval: time.Minute,
+    CPUSampleDuration: 10 * time.Second,
+}
+ctx, stop := bedrock.Init(context.Background(), bedrock.WithConfig(cfg))
+defer stop()
+```
+
+The encoder targets experimental `opentelemetry-proto/profiles/v1development` **v0.2.0**. It translates pprof sample types, values, stacks, functions, and mappings into native OTLP dictionaries and profiles. It does not tunnel raw pprof. The isolated `compat/otlp` suite verifies official decoding and a schema-checking HTTP receiver. Configure a receiver that supports this exact schema; compatibility with newer experimental schemas or any vendor backend is not implied.
+
+`ProfileExportConfig` supports TLS configuration, explicit `AllowHTTP` for local plaintext collectors, per-type selection, a delivery timeout, an upload/collection size limit, and up to three retries. Profile export follows no redirects. Default profile types are CPU, heap, and goroutine. `Types: []bedrock.ProfileType{}` disables collection. CPU windows must be positive and shorter than the interval. `CloudProfiles()` disables cloud profiling independently of traces and metrics.
+
+CPU profiling is process-wide: other agents and manual sessions can own it. Conflicting collection is skipped, never stopped. `ProfileStats()` exposes exports, failures and skips. Explicit exporters started with `StartProfileExport` are also stopped by `Shutdown`. Mutex and block sampling are disabled by the Go runtime unless configured. `MutexSampleFraction` refuses conflicting existing settings; positive `BlockSampleRate` explicitly changes the process-wide block sampler. These explicit runtime settings persist after export stops; coordinate them with other agents.
+
+Automatic telemetry now excludes URL credentials, query strings, fragments, raw outgoing paths, incoming user agents, infrastructure identifiers, error details and full source paths by default. Incoming HTTP metrics use Go route templates or `_` for unmatched/custom routers. Configure explicit additional attributes for an intentionally reviewed field. Request/response bodies and arbitrary HTTP headers are not automatically captured.
+
+`Config.DataPolicy` accepts `privacy.Policy` from `github.com/kzs0/bedrock/privacy`. `AttributeKeys` and `ResourceKeys` independently allowlist attributes and resources; nil attribute keys keep non-sensitive fields, while nil resource keys omit host/process/Kubernetes/container identifiers. Set `DisableEnvironmentDetection` to avoid metadata discovery entirely. `AllowErrorDetails`, `AllowSourcePaths` and `AllowProfileLabels` are explicit opt-ins. Profile labels pass through the same policy. The concurrent-safe `Redact` callback receives qualified group/map paths and handles application-specific data in attributes, nested maps/slices, errors, status messages and log fields. Unknown structured values are suppressed. Each traversal is limited to 4,096 nodes; cycles and repeated aliases use explicit markers. Grouped allowlists use qualified paths or a group prefix. Error and exception namespaces remain private through group ancestry unless details are explicitly enabled. Checked profile encoding rejects post-policy attributes exceeding 64 items, 4,096 nodes, or depth eight instead of silently shortening them. No heuristic reliably detects arbitrary secrets in free text; review your callback and exported fields. Collected heap profiles describe allocation samples, not live object contents.
+
+Metric dimensions no longer automatically include infrastructure resources. Default bounds are 1,000 families and 1,000 series per family, configured through `MetricFamilyLimit` and `MetricSeriesLimit`. `Metrics().DroppedSeries()` and batch processor `Stats()` expose rejected measurements. Overflow spans/series are dropped; family/schema/name conflicts panic at registration so configuration mistakes are visible. Use stable operation names. `TraceSampleRate: 0` now disables recording; use `DefaultConfig()` for defaults rather than expecting zero fields to mean sampling enabled.
+
+For optional HTTP debugging, explicitly import `github.com/kzs0/bedrock/profile` and provide `profile.Handler()` through `server.Config.ProfileHandler` (plus `EnablePprof`) or `Config.ServerProfileHandler` (plus `ServerPprof`). The flag alone enables no handlers. The optional package imports standard `net/http/pprof`, which also registers global handlers; use isolated authenticated muxes. Its explicit handlers accept GET only and bound collection to thirty seconds. OTLP export remains the recommended production path.
+
+
 ## Features
 
 - **Context-based**: No globals, everything flows through `context.Context`
@@ -12,7 +47,7 @@ An opinionated observability library for Go that provides tracing, metrics, prof
 - **W3C Trace Context**: Standards-compliant distributed tracing with automatic propagation
 - **HTTP middleware**: Automatic operation setup for HTTP handlers with trace extraction
 - **HTTP client**: Instrumented clients with automatic trace injection and span creation
-- **Observability server**: Built-in endpoints for metrics, profiling, and health checks
+- **Observability server**: Built-in endpoints for metrics and health checks
 - **Environment configuration**: Parse from env vars or provide explicit config
 - **Canonical logging**: Complete operation lifecycle logging for analysis
 - **Convenient APIs**: Direct logging and metrics functions without manual setup
@@ -636,7 +671,7 @@ BEDROCK_RUNTIME_METRICS=true   # Enable Go runtime metrics collection
 BEDROCK_SERVER_ENABLED=true    # Auto-start server
 BEDROCK_SERVER_ADDR=127.0.0.1:9090  # Loopback-only by default
 BEDROCK_SERVER_METRICS=true    # Enable /metrics
-BEDROCK_SERVER_PPROF=false     # Enable /debug/pprof only when explicitly needed
+BEDROCK_SERVER_PPROF=false     # Requires an explicit handler too
 BEDROCK_SERVER_READ_TIMEOUT=10s
 BEDROCK_SERVER_READ_HEADER_TIMEOUT=5s
 BEDROCK_SERVER_WRITE_TIMEOUT=30s
@@ -740,7 +775,7 @@ import "github.com/kzs0/bedrock/server"
 obsServer := server.New(b.Metrics(), server.Config{
     Addr:              "0.0.0.0:9090",
     EnableMetrics:     true,
-    EnablePprof:       true,
+    EnablePprof:       false,
     ReadTimeout:       5 * time.Second,
     ReadHeaderTimeout: 2 * time.Second,
     WriteTimeout:      10 * time.Second,
@@ -778,7 +813,7 @@ appServer.ListenAndServe()
 
 ## Cloud Backend
 
-Connect to the managed Bedrock platform with a single option. Traces are exported via gRPC (OTLP), metrics are pushed in Prometheus text format every 15 seconds, and profiles (CPU, heap, goroutine, mutex) are pushed every 60 seconds.
+Connect to the managed Bedrock platform with a single option. Traces are exported via gRPC (OTLP), metrics are pushed in Prometheus text format every 15 seconds, and profiles (CPU, heap, goroutine) are pushed every 60 seconds.
 
 ```go
 ctx, close := bedrock.Init(context.Background(),
@@ -852,7 +887,7 @@ defer close()
 ```go
 func main() {
     cfg := bedrock.DefaultConfig()
-    // cfg.ServerPprof = true // Explicitly opt in if local profiling is needed.
+    // Profiles use separately configured OTLP export.
     ctx, close := bedrock.Init(context.Background(), bedrock.WithConfig(cfg))
     defer close()
 
@@ -1184,7 +1219,7 @@ partial exposition. Validate custom buckets during configuration rollout.
 **Observability Server**:
 
 The observability server provides metrics and health checks by default. Profiling
-endpoints are available only when `EnablePprof` is explicitly enabled:
+endpoints require an explicitly imported debug handler as described above. The default server registers no profiling endpoints:
 
 ```go
 import "github.com/kzs0/bedrock/server"
@@ -1194,7 +1229,7 @@ obsServer := server.New(b.Metrics(), server.Config{
     // Wildcard binding and pprof are explicit opt-ins for controlled networks.
     Addr:          "0.0.0.0:9090",
     EnableMetrics: true,
-    EnablePprof:   true,
+    EnablePprof:   false,
 })
 go obsServer.ListenAndServe()
 ```
@@ -1239,8 +1274,8 @@ curl http://localhost:9090/health
 Bedrock includes a complete observability stack example with Docker Compose:
 
 The Compose app explicitly binds its observability server to `0.0.0.0:9090`
-and enables pprof so Prometheus and Pyroscope can reach it across the container
-network. These are example-specific opt-ins, not library defaults.
+for Prometheus metrics. Profiling endpoints remain disabled. Configure
+`BEDROCK_PROFILE_ENDPOINT` and a schema-compatible receiver for profile export; the legacy Pyroscope scraper configuration is optional and inactive without explicit debug handlers.
 
 **Location**: `/example/fullstack/`
 
@@ -1270,12 +1305,12 @@ docker-compose up -d
 - Automatic metric scraping from `:9090/metrics`
 - OTLP trace export to Jaeger
 - JSON log collection via Promtail
-- Continuous profiling (CPU, heap, goroutines) via pprof scraping
+- OTLP profile export through `BEDROCK_PROFILE_ENDPOINT`
 - Health checks for all services
 
 **Profiling Options**:
 
-1. **Manual profiling** (pprof):
+1. **Optional manual debugging** (requires explicit authenticated HTTP handlers):
 ```bash
 # CPU profile (30 seconds)
 curl -o cpu.prof http://localhost:9090/debug/pprof/profile?seconds=30
@@ -1290,8 +1325,8 @@ curl -o goroutine.prof http://localhost:9090/debug/pprof/goroutine
 go tool pprof goroutine.prof
 ```
 
-2. **Continuous profiling** (Pyroscope):
-- Automatically scrapes pprof endpoints every 15 seconds
+2. **Continuous profiling** (OTLP Profiles receiver):
+- Receives exports from the configured OTLP endpoint
 - View flamegraphs in Grafana or Pyroscope UI
 - Compare profiles over time
 - Analyze CPU, memory (alloc/inuse), goroutines, mutex, and block profiles
@@ -1307,18 +1342,54 @@ go tool pprof goroutine.prof
 ## Development, Compatibility, and Support
 
 Bedrock requires Go 1.24 or newer. CI builds and runs race-enabled tests on Go
-1.24, builds and runs ordinary tests on Go 1.24 and 1.26, and separately checks
-80% aggregate coverage, formatting, vet, lint, the nested `bench` module, and
-known vulnerabilities. Before opening a pull request, run:
+1.24, builds and runs ordinary tests on Go 1.24, 1.26, and 1.27, and separately checks
+separate 90% unit and E2E coverage gates, formatting, vet, lint, the nested `bench`
+module, and known vulnerabilities. Functional E2E jobs run on Go 1.24.13 and 1.27.3
+without Docker or vendor services. Before opening a pull request, run:
 
 ```bash
 go build ./...
 make ci
 ```
 
-Use Go 1.26 for CI-equivalent local results. The aggregate `make ci` target
-requires at least Go 1.25 because of the pinned vulnerability scanner; the
-library itself retains its Go 1.24 baseline.
+Use Go 1.27 for CI-equivalent local results. The aggregate `make ci` target
+uses tooling requiring Go 1.26 or newer; the library itself retains its
+Go 1.24 baseline.
+
+`make e2e` builds and runs a real application against local test receivers.
+`make e2e-race` races both the harness and application subprocess. The latest-Go
+PR E2E job combines race instrumentation with subprocess coverage; the baseline
+job collects ordinary subprocess coverage.
+`make e2e-coverage` additionally records application subprocess coverage in
+`.coverage-e2e/`, exports `coverage-e2e.out`, and writes a file/function inventory.
+It enforces a separate 90% statement coverage gate.
+CI uploads these counters, the inventory, and diagnostics for 14 days, including
+on failure. E2E shutdown must finish normally to write application counters.
+The E2E percentage covers only library packages linked into the fixture;
+optional packages such as `profile/handler.go` remain uninstrumented and appear
+as such in the inventory. Fixture main is instrumented for Go's exit hook,
+then excluded from the exported library profile and percentage denominator.
+
+`make coverage` instruments every root library package, including calls from
+other packages' tests, while excluding runnable examples from both the tests
+and coverage denominator. It enforces a 90% statement coverage gate and writes
+`coverage-inventory.md`, listing every library source file, every reported
+function, and zero-coverage functions. Files with no executable statements are
+shown separately from executable files missing instrumentation. E2E coverage
+is reported separately; percentages are never added to unit coverage. Tests in
+nested modules do not contribute to the root unit profile. Inventory generation
+requires Python 3 and uses only its standard library.
+
+The root library has zero third-party dependencies. Official protocol decoders
+and compatibility oracles belong only to the isolated `compat/otlp` module;
+benchmark dependencies belong to `bench`.
+
+`make fuzz-smoke` runs the native pprof parser and nested privacy policy fuzzers
+for ten seconds each with two workers. PR CI runs this smoke target on Go
+1.27.3; ordinary baseline tests also execute their seed corpora. The scheduled
+and manually dispatched Native Fuzz workflow runs each fuzzer for five minutes,
+with test and job deadlines. Failures retain logs and reproducer corpora for
+14 days. Extended fault matrices remain future work beyond the PR smoke suite.
 
 The module is pre-1.0, so minor releases can include intentional API or
 behavior changes. Review [CHANGELOG.md](CHANGELOG.md) before upgrading,

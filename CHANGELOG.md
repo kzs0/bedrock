@@ -9,6 +9,15 @@ pre-1.0, minor releases may include intentional API or behavior changes.
 
 ### Added
 
+- Public-API subprocess E2E tests cover telemetry, profiles, privacy, lifecycle, cloud, gRPC, and TLS behavior.
+- Fault-injection E2E tests verify queue accounting, transport recovery, retry budgets, cancellation, and CPU-profiler ownership.
+- Configuration, public API, HTTP/2 protocol, privacy, profile conversion, and metric exposition contracts enforce separate 90% unit/E2E coverage gates.
+- Separate cross-package unit and linked-library E2E coverage inventories, plus bounded PR and scheduled native fuzzing.
+
+- Independent OTLP HTTP profile exports with native experimental v0.2.0 sample conversion, TLS, type selection, limits, retries and export statistics.
+- Shared telemetry privacy policy, metadata opt-out, metric cardinality limits and visible export drops.
+- Official OTLP profile decoder and schema-checking receiver compatibility tests.
+
 - Added `Op.End` with explicit success and failure outcome overrides.
 - Added registry-level configurable histogram buckets.
 - Added automated verification and GitHub Release publication for semantic
@@ -17,6 +26,14 @@ pre-1.0, minor releases may include intentional API or behavior changes.
   release guidance.
 
 ### Changed
+
+- Updated golangci-lint to v2.15.0 for Go 1.27 compiler support.
+- CI tests Go 1.27.3 alongside the Go 1.24 baseline and Go 1.26; release and profile compatibility checks use Go 1.27.3.
+
+- Core imports no longer register global pprof routes. HTTP profiling requires explicit optional handler injection.
+- Safe telemetry defaults omit raw URLs/paths, user agents, infrastructure identifiers, error details and full source paths; explicit policy options restore reviewed fields.
+- Zero sampling rate disables recording. Metric registration rejects name/schema conflicts and bounds families and series.
+- Profile encoding uses a bounded internal pprof protobuf parser. The core library guarantees zero third-party dependencies and preserves the Go 1.24 baseline.
 
 - Operation completion is idempotent: the first `Done` or `End` call wins.
 - Metric registries and Bedrock instances defensively copy histogram bucket
@@ -44,6 +61,15 @@ pre-1.0, minor releases may include intentional API or behavior changes.
   reconnect behavior, and supports both TLS with ALPN and cleartext h2c.
 
 ### Fixed
+
+- Preserve explicit attribute overrides in large sets and merges.
+- Preserve large unsigned OTLP attribute values as decimal strings and retain typed zero, false, and empty protobuf values.
+- Preserve repeated zero-valued native profile samples and classify inbound HTTP spans as server spans.
+
+- Bounded batch export concurrency and historical errors; preserved cancellation and drain ordering.
+- HTTP informational responses, panic outcome metrics, request ownership and NoTrace client descendants.
+- Unsampled trace propagation, parent-based decisions, label identity collisions and thread metric reporting.
+- Init cleanup now uses effective shutdown defaults; explicit profile workers join Bedrock shutdown.
 
 - Counters preserve fractional increments during atomic concurrent updates.
 - Counters ignore negative and NaN updates without corrupting their value.

@@ -23,7 +23,7 @@ func NewSet(attrs ...Attr) Set {
 	copy(sorted, attrs)
 
 	// Sort by key
-	slices.SortFunc(sorted, func(a, b Attr) int { return cmp.Compare(a.Key, b.Key) })
+	slices.SortStableFunc(sorted, func(a, b Attr) int { return cmp.Compare(a.Key, b.Key) })
 
 	// Deduplicate (keep last value for each key)
 	deduped := sorted[:0]
@@ -79,7 +79,7 @@ func (s Set) Merge(other ...Attr) Set {
 	combined = append(combined, s.attrs...)
 	combined = append(combined, other...)
 
-	slices.SortFunc(combined, func(a, b Attr) int { return cmp.Compare(a.Key, b.Key) })
+	slices.SortStableFunc(combined, func(a, b Attr) int { return cmp.Compare(a.Key, b.Key) })
 
 	deduped := combined[:0]
 	for i, a := range combined {
@@ -107,7 +107,7 @@ func (s Set) MergeSet(other Set) Set {
 	combined = append(combined, s.attrs...)
 	combined = append(combined, other.attrs...)
 
-	slices.SortFunc(combined, func(a, b Attr) int { return cmp.Compare(a.Key, b.Key) })
+	slices.SortStableFunc(combined, func(a, b Attr) int { return cmp.Compare(a.Key, b.Key) })
 
 	deduped := combined[:0]
 	for i, a := range combined {
